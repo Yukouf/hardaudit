@@ -139,8 +139,10 @@ def audit_ssh():
 def audit_network():
     m = Module("Reseau & Ports", 12, "CIS 3.x")
     try:
-        # Ports en ecoute
+        # Ports en ecoute (fallback netstat si ss absent)
         listening = subprocess.run(["ss", "-tlnp"], capture_output=True, text=True, timeout=5)
+        if listening.returncode != 0:
+            listening = subprocess.run(["netstat", "-tlnp"], capture_output=True, text=True, timeout=5)
         lines = [l for l in listening.stdout.splitlines() if "LISTEN" in l]
 
         # Ports exposes sur 0.0.0.0
@@ -285,10 +287,15 @@ def audit_services():
 def audit_filesystem():
     m = Module("Systeme de fichiers", 10, "CIS 1.1 / ANSSI R28")
     try:
-        # /tmp executable
+        # /tmp executable (fallback mount si findmnt absent)
         tmp_opts = subprocess.run(["findmnt", "/tmp", "-o", "OPTIONS", "-n"],
                                  capture_output=True, text=True, timeout=3)
-        if "noexec" not in tmp_opts.stdout:
+        if tmp_opts.returncode != 0:
+            tmp_opts = subprocess.run(["mount"], capture_output=True, text=True, timeout=3)
+            noexec = "noexec" in tmp_opts.stdout and "/tmp " in tmp_opts.stdout
+        else:
+            noexec = "noexec" in tmp_opts.stdout
+        if not noexec:
             m.add("/tmp executable", "Monter /tmp avec noexec,nosuid.", "MEDIUM")
 
         # World-writable files (echantillon rapide)
