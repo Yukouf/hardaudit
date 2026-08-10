@@ -94,8 +94,8 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 |---|---|---|---|
 | Utilisateurs | 12 | CIS 5.x | Root accessible, UID 0 non-root, sudo sans mdp, umask |
 | SSH | 12 | CIS 5.2 / ANSSI R5 | PermitRootLogin, PasswordAuth, X11Forwarding, port |
-| Réseau | 12 | CIS 3.x | Ports exposés, IPv6 inutile |
-| Firewall | 12 | CIS 3.5 | iptables/nftables/UFW actif, politique DROP |
+| Réseau | 12 | CIS 3.x | Écoutes sur toutes les interfaces, sans confondre écoute locale et exposition Internet |
+| Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
 | Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, kptr_restrict, ptrace_scope, syncookies |
 | Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires supprimés encore actifs |
@@ -111,9 +111,9 @@ Score    Grade   Interprétation
 ─────────────────────────────────
 90-100   A       Excellent — machine bien sécurisée
 75-89    B       Bon — quelques améliorations mineures
-60-74    C       Passable — des vulns à corriger
-40-59    D       Faible — plusieurs problèmes critiques
-0-39     F       Critique — machine exposée
+60-74    C       Plusieurs contrôles à examiner
+40-59    D       Durcissement nettement incomplet
+0-39     F       Nombreux contrôles non satisfaits — analyse manuelle indispensable
 ```
 
 Chaque finding a une sévérité :

@@ -10,6 +10,8 @@ from hardaudit import (
     audit_users,
     classify_deleted_executable,
     classify_update_severity,
+    extract_unreviewed_wildcard_ports,
+    firewall_has_default_deny,
     print_finding,
     get_effective_sshd_settings,
     scan_deleted_executables,
@@ -91,6 +93,28 @@ class FalsePositiveRegressionTests(unittest.TestCase):
         self.assertEqual(settings["permitrootlogin"], "prohibit-password")
         self.assertEqual(settings["passwordauthentication"], "no")
         self.assertEqual(settings["port"], "2222")
+
+    def test_ufw_default_deny_overrides_iptables_accept(self):
+        self.assertTrue(firewall_has_default_deny(
+            "Chain INPUT (policy ACCEPT)", "", "Status: active\nDefault: deny (incoming), allow (outgoing)"
+        ))
+
+    def test_nft_input_policy_drop_is_detected(self):
+        nft = "chain input { type filter hook input priority filter; policy drop; }"
+        self.assertTrue(firewall_has_default_deny("", nft, "Status: inactive"))
+
+    def test_accept_only_firewall_is_not_default_deny(self):
+        self.assertFalse(firewall_has_default_deny(
+            "Chain INPUT (policy ACCEPT)", "chain input { policy accept; }", "Status: inactive"
+        ))
+
+    def test_wildcard_ports_are_grouped_and_known_public_ports_ignored(self):
+        output = "\n".join([
+            "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*",
+            "LISTEN 0 128 0.0.0.0:3306 0.0.0.0:*",
+            "LISTEN 0 128 *:10050 *:*",
+        ])
+        self.assertEqual(extract_unreviewed_wildcard_ports(output), ["3306", "10050"])
 
 
 if __name__ == "__main__":

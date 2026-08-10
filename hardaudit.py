@@ -171,39 +171,57 @@ def audit_ssh():
     return m
 
 
+def extract_unreviewed_wildcard_ports(output):
+    """Retourne les ports liés à toutes les interfaces sans prétendre qu'ils sont publics."""
+    common_public = {"22", "80", "443"}
+    ports = set()
+    pattern = re.compile(r"(?:0\.0\.0\.0|\*|\[::\]):(\d+)")
+    for line in output.splitlines():
+        if "LISTEN" not in line.upper():
+            continue
+        for port in pattern.findall(line):
+            if port not in common_public:
+                ports.add(port)
+    return sorted(ports, key=lambda value: int(value))
+
+
+def firewall_has_default_deny(iptables_text, nft_text, ufw_text):
+    """Détecte une politique entrante deny/drop dans le backend réellement actif."""
+    if re.search(r"(?mi)^Status:\s*active\s*$", ufw_text) and re.search(
+        r"(?mi)^Default:\s*(?:deny|reject)\s*\(incoming\)", ufw_text
+    ):
+        return True
+    if re.search(r"(?mi)^(?:Chain INPUT \(policy|-P INPUT\s+)(?:DROP|REJECT)\)?", iptables_text):
+        return True
+    if re.search(r"(?is)hook\s+input[^}]*policy\s+(?:drop|reject)\s*;", nft_text):
+        return True
+    return False
+
+
+def _capture(command):
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=5)
+        return result.returncode, result.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return 127, ""
+
+
 def audit_network():
     m = Module("Reseau & Ports", 12, "CIS 3.x")
     try:
-        # Ports en ecoute (fallback netstat si ss absent)
-        listening = subprocess.run(["ss", "-tlnp"], capture_output=True, text=True, timeout=5)
-        if listening.returncode != 0:
-            listening = subprocess.run(["netstat", "-tlnp"], capture_output=True, text=True, timeout=5)
-        lines = [l for l in listening.stdout.splitlines() if "LISTEN" in l]
-
-        # Ports exposes sur 0.0.0.0
-        exposed = [l for l in lines if "0.0.0.0:" in l or "*:" in l]
-        known_ok = {"22", "80", "443", "4173", "11434", "5000", "3000", "8080", "8443",
-                     "53", "9377", "20241", "20242", "20243"}  # ports dev/DNS connus
-        seen = set()
-        for line in exposed:
-            parts = line.split()
-            if len(parts) >= 4:
-                addr = parts[3]
-                port = addr.split(":")[-1]
-                if port in seen: continue
-                seen.add(port)
-                if port not in known_ok:
-                    m.add(f"Port {port} expose", f"Service en ecoute sur 0.0.0.0:{port}.", "MEDIUM",
-                          verify=f"sudo ss -ltnp | grep ':{port} '")
-
-        # IPv6 si pas utilise
-        if os.path.exists("/proc/net/if_inet6"):
-            with open("/proc/net/if_inet6") as f:
-                if f.read().strip():
-                    # Verifier si IPv6 est desactive
-                    disable_ipv6 = os.path.exists("/etc/sysctl.d/99-disable-ipv6.conf")
-                    if not disable_ipv6:
-                        m.add("IPv6 actif", "Desactiver si non utilise.", "LOW")
+        # Une écoute wildcard est un fait local. L'exposition externe dépend du firewall.
+        code, output = _capture(["ss", "-tlnp"])
+        if code != 0:
+            _, output = _capture(["netstat", "-tlnp"])
+        ports = extract_unreviewed_wildcard_ports(output)
+        if ports:
+            listed = ", ".join(ports)
+            m.add(
+                f"{len(ports)} port(s) en ecoute sur toutes les interfaces",
+                f"Ports: {listed}. Cela ne prouve pas une accessibilite depuis Internet ; verifier le firewall et les besoins metier.",
+                "MEDIUM",
+                verify="sudo ss -ltnp; sudo ufw status verbose; sudo nft list ruleset",
+            )
     except Exception as e:
         m.add("Erreur audit reseau", str(e), "MEDIUM")
 
@@ -214,26 +232,26 @@ def audit_network():
 def audit_firewall():
     m = Module("Firewall", 12, "CIS 3.5")
     try:
-        # iptables
-        ipt = subprocess.run(["iptables", "-L", "-n"], capture_output=True, text=True, timeout=5)
-        nft = subprocess.run(["nft", "list", "ruleset"], capture_output=True, text=True, timeout=5)
-        ufw = subprocess.run(["ufw", "status"], capture_output=True, text=True, timeout=5)
+        _, ipt = _capture(["iptables", "-L", "-n"])
+        _, nft = _capture(["nft", "list", "ruleset"])
+        _, ufw = _capture(["ufw", "status", "verbose"])
 
-        has_ipt = len([l for l in ipt.stdout.splitlines() if l.strip() and not l.startswith("Chain")]) > 0
-        has_nft = "table" in nft.stdout.lower()
-        has_ufw = "active" in ufw.stdout.lower()
+        has_ipt = bool(re.search(r"(?m)^Chain\s+", ipt))
+        has_nft = "table" in nft.lower()
+        has_ufw = bool(re.search(r"(?mi)^Status:\s*active\s*$", ufw))
 
+        verify = "sudo ufw status verbose; sudo nft list ruleset; sudo iptables -S INPUT"
         if not (has_ipt or has_nft or has_ufw):
-            m.add("Aucun firewall actif", "Ni iptables, ni nftables, ni UFW detecte.", "CRITICAL")
-        else:
-            # Verifier politique par defaut DROP
-            if has_ipt:
-                for line in ipt.stdout.splitlines():
-                    if line.startswith("Chain INPUT") and "DROP" not in line:
-                        m.add("Politique INPUT != DROP", "iptables INPUT policy n'est pas DROP.", "HIGH",
-                              verify="sudo iptables -S INPUT")
-                        break
-    except: pass
+            m.add("Aucun firewall actif", "Ni iptables, ni nftables, ni UFW actif detecte.", "CRITICAL", verify)
+        elif not firewall_has_default_deny(ipt, nft, ufw):
+            m.add(
+                "Politique entrante par defaut non bloquante",
+                "Aucune politique deny/drop entrante n'a ete identifiee dans UFW, nftables ou iptables. Les regles detaillees restent a examiner.",
+                "MEDIUM",
+                verify,
+            )
+    except Exception as e:
+        m.add("Erreur audit firewall", str(e), "MEDIUM")
     m.finalize()
     return m
 
