@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 HardAudit — Outil d'audit de securite pour VMs Linux.
-Score sur 100, 8 modules, couleurs ANSI, export rapport.
+Score sur 100, 9 modules, couleurs ANSI, export rapport.
 Usage : sudo python3 hardaudit.py [--json | --quiet]
 """
 
@@ -259,6 +259,35 @@ def audit_kernel():
     return m
 
 
+def scan_deleted_executables(proc_root="/proc"):
+    """Retourne les processus dont l'executable a ete supprime du disque."""
+    found = []
+    try:
+        entries = os.listdir(proc_root)
+    except OSError:
+        return found
+
+    for pid in entries:
+        if not pid.isdigit():
+            continue
+        proc_dir = os.path.join(proc_root, pid)
+        try:
+            target = os.readlink(os.path.join(proc_dir, "exe"))
+            if not target.endswith(" (deleted)"):
+                continue
+            name = "unknown"
+            try:
+                with open(os.path.join(proc_dir, "comm"), encoding="utf-8", errors="replace") as f:
+                    name = f.read().strip() or name
+            except OSError:
+                pass
+            found.append({"pid": int(pid), "name": name, "target": target})
+        except (OSError, ValueError):
+            # Le processus peut disparaitre pendant le scan ou etre inaccessible.
+            continue
+    return sorted(found, key=lambda item: item["pid"])
+
+
 def audit_services():
     m = Module("Services & Cron", 10, "CIS 2.x")
     try:
@@ -279,6 +308,17 @@ def audit_services():
                     if os.stat(fp).st_mode & 0o022:
                         m.add(f"Cron writable: {fp}", "Fichier cron accessible en ecriture a d'autres.", "HIGH")
                 except: pass
+
+        # Un programme peut continuer a tourner apres la suppression de son
+        # binaire. Cela peut etre legitime apres une mise a jour, mais aussi
+        # indiquer qu'un malware essaie d'effacer sa trace sur le disque.
+        for proc in scan_deleted_executables():
+            m.add(
+                "Processus avec binaire supprime",
+                f"PID {proc['pid']} ({proc['name']}) execute encore {proc['target']}. "
+                f"Capturer /proc/{proc['pid']}/exe puis verifier le hash et l'origine du processus.",
+                "HIGH",
+            )
     except: pass
     m.finalize()
     return m

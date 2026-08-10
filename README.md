@@ -85,7 +85,7 @@ C'est tout. Pas de pip install. Pas de virtualenv. Pas de Docker. **Python 3.8+ 
 | Firewall | 12 | CIS 3.5 | iptables/nftables/UFW actif, politique DROP |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
 | Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, kptr_restrict, ptrace_scope, syncookies |
-| Services | 10 | CIS 2.x | Services obsolètes (telnet, rsh...), cron jobs |
+| Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires supprimés encore actifs |
 | Filesystem | 10 | CIS 1.1 / ANSSI R28 | /tmp executable, world-writable, sticky bit, shadow |
 | Logs | 8 | CIS 4.x | auditd, rsyslog, logrotate |
 
@@ -154,6 +154,7 @@ $ sudo python3 hardaudit.py
 ```
 hardaudit/
 ├── hardaudit.py      # Le script — tout tient dans un seul fichier
+├── test_hardaudit.py # Tests sans dépendance externe
 ├── LICENSE           # MIT
 └── README.md         # Ce fichier
 ```
@@ -180,6 +181,7 @@ HardAudit, c'est l'outil que tu balances en 2 secondes sur une VM pour avoir un 
 - [x] Couleurs ANSI + barres de progression
 - [x] Export TXT
 - [x] Zéro dépendance
+- [x] Détection des processus dont le binaire a été supprimé
 - [ ] Export HTML avec graphiques
 - [ ] Mode non-interactif pour CI/CD (--json déjà fait)
 - [ ] Module Docker security
