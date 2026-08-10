@@ -119,6 +119,25 @@ class KernelSysctlSemanticsTests(unittest.TestCase):
     def test_stricter_ptrace_scope_is_accepted(self):
         self.assertFalse(kernel_sysctl_is_unsafe("kernel.yama.ptrace_scope", "3"))
 
+    def test_permissive_perf_access_is_rejected(self):
+        self.assertTrue(kernel_sysctl_is_unsafe("kernel.perf_event_paranoid", "1"))
+
+    def test_representative_ubuntu_perf_lockdown_is_accepted(self):
+        self.assertFalse(kernel_sysctl_is_unsafe("kernel.perf_event_paranoid", "4"))
+
+    def test_perf_finding_is_emitted_for_weak_value(self):
+        real_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if path == "/proc/sys/kernel/perf_event_paranoid":
+                return StringIO("1\n")
+            return real_open(path, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=fake_open):
+            findings = [f for f in audit_kernel().findings if "Perf expose" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "MEDIUM")
+
     def test_exact_boolean_control_stays_exact(self):
         self.assertTrue(kernel_sysctl_is_unsafe("kernel.dmesg_restrict", "0"))
         self.assertFalse(kernel_sysctl_is_unsafe("kernel.dmesg_restrict", "1"))

@@ -338,6 +338,7 @@ def kernel_sysctl_is_unsafe(name, value, expected=None):
     minimums = {
         "kernel.kptr_restrict": 1,
         "kernel.yama.ptrace_scope": 1,
+        "kernel.perf_event_paranoid": 2,
     }
     if name in minimums:
         try:
@@ -356,6 +357,7 @@ def audit_kernel():
         "/proc/sys/kernel/kptr_restrict": ("1", "kptr_restrict < 1", "MEDIUM"),
         "/proc/sys/kernel/dmesg_restrict": ("1", "dmesg accessible", "LOW"),
         "/proc/sys/kernel/yama/ptrace_scope": ("1", "ptrace non restreint", "MEDIUM"),
+        "/proc/sys/kernel/perf_event_paranoid": ("2", "Perf expose le kernel aux utilisateurs non privilegies", "MEDIUM"),
         "/proc/sys/net/ipv4/tcp_syncookies": ("1", "TCP syncookies off", "MEDIUM"),
         "/proc/sys/net/ipv4/ip_forward": ("0", "IP forwarding actif", "MEDIUM"),
         "/proc/sys/net/ipv4/conf/all/accept_source_route": ("0", "Source routing accepte", "HIGH"),
@@ -372,7 +374,8 @@ def audit_kernel():
             name = path[len(prefix):].replace("/", ".") if path.startswith(prefix) else path
             if kernel_sysctl_is_unsafe(name, val, expected):
                 comparator = "minimum" if name in (
-                    "kernel.kptr_restrict", "kernel.yama.ptrace_scope"
+                    "kernel.kptr_restrict", "kernel.yama.ptrace_scope",
+                    "kernel.perf_event_paranoid",
                 ) else "attendu"
                 m.add(msg, f"{path} = {val} ({comparator}: {expected})", sev,
                       verify=f"cat {path}")
