@@ -106,7 +106,8 @@ class UnprivilegedBpfTests(unittest.TestCase):
             self.assertEqual(scan_unprivileged_bpf(sysctl.name), 0)
 
         with patch("hardaudit.scan_unprivileged_bpf", return_value=0):
-            findings = [f for f in audit_kernel().findings if "BPF" in f.title]
+            findings = [f for f in audit_kernel().findings
+                        if f.title == "BPF accessible aux utilisateurs non privilegies"]
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0].severity, "MEDIUM")
 
@@ -115,6 +116,32 @@ class UnprivilegedBpfTests(unittest.TestCase):
             sysctl.write("2\n")
             sysctl.flush()
             self.assertIsNone(scan_unprivileged_bpf(sysctl.name))
+
+
+class BpfJitHardeningTests(unittest.TestCase):
+    def test_disabled_jit_hardening_is_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("0\n")
+            sysctl.flush()
+            self.assertEqual(hardaudit.scan_bpf_jit_hardening(sysctl.name), 0)
+
+        with patch("hardaudit.scan_bpf_jit_hardening", return_value=0):
+            findings = [f for f in audit_kernel().findings if "JIT BPF" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("JIT spraying", findings[0].detail)
+
+    def test_representative_all_user_hardening_passes(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("2\n")
+            sysctl.flush()
+            self.assertIsNone(hardaudit.scan_bpf_jit_hardening(sysctl.name))
+
+    def test_unprivileged_only_mode_remains_visible(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("1\n")
+            sysctl.flush()
+            self.assertEqual(hardaudit.scan_bpf_jit_hardening(sysctl.name), 1)
 
 
 class IoUringRestrictionTests(unittest.TestCase):

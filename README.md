@@ -111,7 +111,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 | Réseau | 12 | CIS 3.x | Écoutes sur toutes les interfaces, sans confondre écoute locale et exposition Internet |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
-| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié, io_uring et userfaultfd non restreints, namespaces utilisateur sans médiation AppArmor sur les kernels compatibles, page mémoire nulle, autoload des disciplines TTY, verrous kexec/modules/Lockdown, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
+| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié et durcissement du JIT BPF, io_uring et userfaultfd non restreints, namespaces utilisateur sans médiation AppArmor sur les kernels compatibles, page mémoire nulle, autoload des disciplines TTY, verrous kexec/modules/Lockdown, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
 | Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires supprimés encore actifs |
 | Filesystem | 10 | CIS 1.1 / ANSSI R28 | /tmp executable, world-writable, sticky bit, shadow |
 | Logs | 8 | CIS 4.x | auditd, rsyslog, logrotate |
@@ -170,6 +170,9 @@ sysctl kernel.kptr_restrict
 # Accès au syscall BPF par les utilisateurs non privilégiés (0 = autorisé, 1/2 = bloqué)
 sysctl kernel.unprivileged_bpf_disabled
 
+# Durcissement anti-JIT-spraying de BPF (0 = absent, 1 = non privilégiés, 2 = tous)
+sysctl net.core.bpf_jit_harden
+
 # Profilage perf (valeur minimale 2 : aucun événement kernel sans privilège)
 sysctl kernel.perf_event_paranoid
 
@@ -211,6 +214,8 @@ cat /proc/cmdline
 > **Faux positif Lockdown :** le mode `none` est courant sur une VM sans Secure Boot et n'indique pas une compromission. `integrity` ou `confidentiality` est surtout pertinent pour une chaîne de démarrage maîtrisée ; tester auparavant les modules, kexec et outils de diagnostic qui peuvent être bloqués.
 
 > **Faux positif userns :** navigateurs, sandbox et outils de conteneurs peuvent dépendre des namespaces utilisateur. HardAudit ne signale ce point que si le kernel expose la médiation AppArmor dédiée, que `unprivileged_userns_clone=1` et que cette médiation vaut `0` ; tester les profils applicatifs avant de l'activer.
+
+> **Faux positif JIT BPF :** le mode `2` durcit aussi les programmes chargés par des processus privilégiés mais peut coûter en performances. Le mode `1` peut être un compromis acceptable, surtout si le BPF non privilégié est déjà bloqué ; le finding reste donc `LOW` et doit être arbitré selon les usages réseau et observabilité.
 
 ---
 

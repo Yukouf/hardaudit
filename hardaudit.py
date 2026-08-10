@@ -333,6 +333,16 @@ def scan_unprivileged_bpf(path="/proc/sys/kernel/unprivileged_bpf_disabled"):
     return value if value == 0 else None
 
 
+def scan_bpf_jit_hardening(path="/proc/sys/net/core/bpf_jit_harden"):
+    """Retourne le mode si le JIT BPF n'est pas durci pour tous les utilisateurs."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    return value if value in (0, 1) else None
+
+
 def scan_unrestricted_io_uring(path="/proc/sys/kernel/io_uring_disabled"):
     """Retourne 0 lorsque tous les utilisateurs peuvent creer une instance io_uring."""
     try:
@@ -488,6 +498,20 @@ def audit_kernel():
             f"{path} = 0. Le syscall bpf() reste disponible sans CAP_BPF ou CAP_SYS_ADMIN, ce qui elargit la surface d'attaque du kernel.",
             "MEDIUM",
             verify=f"cat {path}",
+        )
+
+    # Le kernel documente que ce durcissement limite le JIT spraying. Le mode 1
+    # ne couvre que les processus sans CAP_BPF/CAP_SYS_ADMIN ; le mode 2 couvre
+    # aussi les chargeurs privilegies, au prix possible de performances.
+    jit_hardening = scan_bpf_jit_hardening()
+    if jit_hardening in (0, 1):
+        path = "/proc/sys/net/core/bpf_jit_harden"
+        scope = "desactive" if jit_hardening == 0 else "limite aux utilisateurs non privilegies"
+        m.add(
+            "Durcissement du JIT BPF incomplet",
+            f"{path} = {jit_hardening} ({scope}). Le mode 2 durcit tous les programmes BPF JIT et reduit le risque de JIT spraying, avec un possible cout de performance.",
+            "LOW",
+            verify=f"cat {path}; cat /proc/sys/kernel/unprivileged_bpf_disabled",
         )
 
     # La documentation du kernel indique explicitement que restreindre
