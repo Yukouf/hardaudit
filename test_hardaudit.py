@@ -18,6 +18,7 @@ from hardaudit import (
     print_finding,
     get_effective_sshd_settings,
     kernel_sysctl_is_unsafe,
+    scan_kernel_lockdown_disabled,
     scan_kexec_enabled,
     scan_deleted_executables,
     scan_fs_link_protections,
@@ -267,6 +268,28 @@ class KernelModuleLoadingLockTests(unittest.TestCase):
             sysctl.write("1\n")
             sysctl.flush()
             self.assertIsNone(hardaudit.scan_module_loading_unlocked(sysctl.name))
+
+
+class KernelLockdownTests(unittest.TestCase):
+    def test_available_but_disabled_lockdown_is_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as status:
+            status.write("[none] integrity confidentiality\n")
+            status.flush()
+            self.assertEqual(scan_kernel_lockdown_disabled(status.name), "none")
+
+        with patch("hardaudit.scan_kernel_lockdown_disabled", return_value="none"):
+            findings = [f for f in audit_kernel().findings if "Lockdown" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+
+    def test_representative_integrity_mode_passes(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as status:
+            status.write("none [integrity] confidentiality\n")
+            status.flush()
+            self.assertIsNone(scan_kernel_lockdown_disabled(status.name))
+
+    def test_missing_interface_is_not_called_disabled(self):
+        self.assertIsNone(scan_kernel_lockdown_disabled("/path/that/does/not/exist"))
 
 
 class KernelSysctlSemanticsTests(unittest.TestCase):

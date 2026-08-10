@@ -411,6 +411,18 @@ def scan_zero_page_mappable(path="/proc/sys/vm/mmap_min_addr"):
     return value if value == 0 else None
 
 
+def scan_kernel_lockdown_disabled(path="/sys/kernel/security/lockdown"):
+    """Retourne le mode courant si l'interface Lockdown existe et vaut none."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            modes = f.read().strip().split()
+    except OSError:
+        return None
+    selected = next((mode[1:-1] for mode in modes
+                     if mode.startswith("[") and mode.endswith("]")), None)
+    return selected if selected == "none" else None
+
+
 def kernel_sysctl_is_unsafe(name, value, expected=None):
     """Compare un sysctl sans signaler comme faible un mode plus strict."""
     minimums = {
@@ -562,6 +574,17 @@ def audit_kernel():
             f"{path} = 0. Une appliance stable peut utiliser 1 apres avoir charge tous ses pilotes ; ce verrou bloque chargement et retrait et est irreversible jusqu'au redemarrage.",
             "LOW",
             verify=f"cat {path}; lsmod",
+        )
+
+    # Lockdown limite ce que même root peut demander au kernel. Ne signaler que
+    # si le kernel expose l'interface : son absence ne prouve pas un mode faible.
+    if scan_kernel_lockdown_disabled() == "none":
+        path = "/sys/kernel/security/lockdown"
+        m.add(
+            "Kernel Lockdown disponible mais inactif",
+            f"{path} selectionne [none]. Les modes integrity/confidentiality bloquent des interfaces permettant de modifier ou d'extraire des donnees du kernel ; a reserver aux hotes dont les modules, kexec et outils de diagnostic ont ete testes.",
+            "LOW",
+            verify=f"cat {path}; cat /proc/cmdline",
         )
 
     # Kernel version
