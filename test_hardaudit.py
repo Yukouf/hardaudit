@@ -17,6 +17,7 @@ from hardaudit import (
     print_finding,
     get_effective_sshd_settings,
     kernel_sysctl_is_unsafe,
+    scan_kexec_enabled,
     scan_deleted_executables,
     scan_fs_link_protections,
     scan_unrestricted_io_uring,
@@ -149,6 +150,26 @@ class TtyLdiscAutoloadTests(unittest.TestCase):
             sysctl.write("0\n")
             sysctl.flush()
             self.assertIsNone(scan_unprivileged_tty_ldisc_autoload(sysctl.name))
+
+
+class KexecRestrictionTests(unittest.TestCase):
+    def test_enabled_kexec_is_reported_with_irreversible_warning(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("0\n")
+            sysctl.flush()
+            self.assertEqual(scan_kexec_enabled(sysctl.name), 0)
+
+        with patch("hardaudit.scan_kexec_enabled", return_value=0):
+            findings = [f for f in audit_kernel().findings if "kexec" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("irreversible", findings[0].detail)
+
+    def test_representative_locked_production_host_passes(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("1\n")
+            sysctl.flush()
+            self.assertIsNone(scan_kexec_enabled(sysctl.name))
 
 
 class KernelSysctlSemanticsTests(unittest.TestCase):

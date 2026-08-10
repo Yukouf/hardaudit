@@ -353,6 +353,16 @@ def scan_unprivileged_tty_ldisc_autoload(path="/proc/sys/dev/tty/ldisc_autoload"
     return value if value == 1 else None
 
 
+def scan_kexec_enabled(path="/proc/sys/kernel/kexec_load_disabled"):
+    """Retourne 0 si le chargement d'un nouveau kernel par kexec reste autorise."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    return value if value == 0 else None
+
+
 def kernel_sysctl_is_unsafe(name, value, expected=None):
     """Compare un sysctl sans signaler comme faible un mode plus strict."""
     minimums = {
@@ -440,6 +450,18 @@ def audit_kernel():
         m.add(
             "Autoload TTY accessible aux utilisateurs non privilegies",
             f"{path} = 1. Un compte local peut demander le chargement automatique d'une discipline TTY absente ; utiliser 0 si cette compatibilite n'est pas requise.",
+            "LOW",
+            verify=f"cat {path}",
+        )
+
+    # Ce verrou est irreversible jusqu'au prochain demarrage. Il empeche meme
+    # root de remplacer le kernel en memoire, mais doit rester disponible sur
+    # les hotes qui utilisent volontairement kexec ou kdump.
+    if scan_kexec_enabled() == 0:
+        path = "/proc/sys/kernel/kexec_load_disabled"
+        m.add(
+            "Remplacement du kernel par kexec encore autorise",
+            f"{path} = 0. Le verrou kexec n'est pas active ; envisager 1 seulement si ni kexec ni kdump ne sont requis (irreversible jusqu'au redemarrage).",
             "LOW",
             verify=f"cat {path}",
         )
