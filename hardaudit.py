@@ -363,6 +363,16 @@ def scan_kexec_enabled(path="/proc/sys/kernel/kexec_load_disabled"):
     return value if value == 0 else None
 
 
+def scan_module_loading_unlocked(path="/proc/sys/kernel/modules_disabled"):
+    """Retourne 0 si le chargement et le retrait de modules restent autorises."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    return value if value == 0 else None
+
+
 def scan_unprivileged_userfaultfd(path="/proc/sys/vm/unprivileged_userfaultfd"):
     """Retourne 1 si userfaultfd peut intercepter des fautes kernel sans privilege."""
     try:
@@ -487,6 +497,18 @@ def audit_kernel():
             f"{path} = 0. Le verrou kexec n'est pas active ; envisager 1 seulement si ni kexec ni kdump ne sont requis (irreversible jusqu'au redemarrage).",
             "LOW",
             verify=f"cat {path}",
+        )
+
+    # Sur une appliance stable, ce verrou retire toute la surface de chargement
+    # dynamique. Il bloque aussi le retrait des modules et ne peut pas etre leve
+    # avant un redemarrage : a eviter si hotplug, DKMS ou pilotes tardifs sont requis.
+    if scan_module_loading_unlocked() == 0:
+        path = "/proc/sys/kernel/modules_disabled"
+        m.add(
+            "Chargement des modules noyau encore autorise",
+            f"{path} = 0. Une appliance stable peut utiliser 1 apres avoir charge tous ses pilotes ; ce verrou bloque chargement et retrait et est irreversible jusqu'au redemarrage.",
+            "LOW",
+            verify=f"cat {path}; lsmod",
         )
 
     # Kernel version

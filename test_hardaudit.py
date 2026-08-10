@@ -5,6 +5,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 from unittest.mock import patch
 
+import hardaudit
 from hardaudit import (
     Finding,
     audit_kernel,
@@ -191,6 +192,26 @@ class KexecRestrictionTests(unittest.TestCase):
             sysctl.write("1\n")
             sysctl.flush()
             self.assertIsNone(scan_kexec_enabled(sysctl.name))
+
+
+class KernelModuleLoadingLockTests(unittest.TestCase):
+    def test_unlocked_module_loading_is_reported_with_irreversible_warning(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("0\n")
+            sysctl.flush()
+            self.assertEqual(hardaudit.scan_module_loading_unlocked(sysctl.name), 0)
+
+        with patch("hardaudit.scan_module_loading_unlocked", return_value=0):
+            findings = [f for f in audit_kernel().findings if "modules noyau" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("irreversible", findings[0].detail)
+
+    def test_representative_immutable_appliance_blocks_module_changes(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("1\n")
+            sysctl.flush()
+            self.assertIsNone(hardaudit.scan_module_loading_unlocked(sysctl.name))
 
 
 class KernelSysctlSemanticsTests(unittest.TestCase):
