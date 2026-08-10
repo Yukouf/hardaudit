@@ -383,6 +383,16 @@ def scan_unprivileged_userfaultfd(path="/proc/sys/vm/unprivileged_userfaultfd"):
     return value if value == 1 else None
 
 
+def scan_zero_page_mappable(path="/proc/sys/vm/mmap_min_addr"):
+    """Retourne 0 si les processus peuvent demander une projection a l'adresse nulle."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    return value if value == 0 else None
+
+
 def kernel_sysctl_is_unsafe(name, value, expected=None):
     """Compare un sysctl sans signaler comme faible un mode plus strict."""
     minimums = {
@@ -473,6 +483,18 @@ def audit_kernel():
             f"{path} = 1. Un compte sans CAP_SYS_PTRACE peut aussi intercepter des fautes venant du kernel ; utiliser 0 sauf besoin documente. Verifier aussi les droits de /dev/userfaultfd s'il existe.",
             "LOW",
             verify=f"cat {path}; [ ! -e /dev/userfaultfd ] || stat -c '%A %U %G %n' /dev/userfaultfd",
+        )
+
+    # Interdire la premiere page empeche un processus non privilegie d'y placer
+    # des donnees qu'un bug de dereferencement NULL du kernel pourrait utiliser.
+    # Toute valeur positive active le garde-fou ; 64 KiB est le choix courant.
+    if scan_zero_page_mappable() == 0:
+        path = "/proc/sys/vm/mmap_min_addr"
+        m.add(
+            "Page memoire nulle accessible aux processus",
+            f"{path} = 0. Aucun plancher n'empeche mmap() de projeter des donnees pres de l'adresse nulle ; utiliser une valeur positive (souvent 65536) sauf besoin logiciel historique.",
+            "MEDIUM",
+            verify=f"cat {path}",
         )
 
     # Le kernel peut charger a la demande une discipline de ligne TTY. Avec

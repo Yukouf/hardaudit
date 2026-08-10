@@ -25,6 +25,7 @@ from hardaudit import (
     scan_unprivileged_bpf,
     scan_unprivileged_tty_ldisc_autoload,
     scan_unprivileged_userfaultfd,
+    scan_zero_page_mappable,
     shadow_permissions_unsafe,
 )
 
@@ -153,6 +154,26 @@ class UserfaultfdRestrictionTests(unittest.TestCase):
             sysctl.write("0\n")
             sysctl.flush()
             self.assertIsNone(scan_unprivileged_userfaultfd(sysctl.name))
+
+
+class NullPageMappingTests(unittest.TestCase):
+    def test_zero_floor_is_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("0\n")
+            sysctl.flush()
+            self.assertEqual(scan_zero_page_mappable(sysctl.name), 0)
+
+        with patch("hardaudit.scan_zero_page_mappable", return_value=0):
+            findings = [f for f in audit_kernel().findings if "Page memoire nulle" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "MEDIUM")
+        self.assertIn("65536", findings[0].detail)
+
+    def test_representative_linux_floor_passes(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("65536\n")
+            sysctl.flush()
+            self.assertIsNone(scan_zero_page_mappable(sysctl.name))
 
 
 class TtyLdiscAutoloadTests(unittest.TestCase):
