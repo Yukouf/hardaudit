@@ -343,6 +343,16 @@ def scan_unrestricted_io_uring(path="/proc/sys/kernel/io_uring_disabled"):
     return value if value == 0 else None
 
 
+def scan_unprivileged_tty_ldisc_autoload(path="/proc/sys/dev/tty/ldisc_autoload"):
+    """Retourne 1 si un utilisateur sans CAP_SYS_MODULE peut demander un ldisc."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    return value if value == 1 else None
+
+
 def kernel_sysctl_is_unsafe(name, value, expected=None):
     """Compare un sysctl sans signaler comme faible un mode plus strict."""
     minimums = {
@@ -418,6 +428,18 @@ def audit_kernel():
         m.add(
             "io_uring accessible a tous les utilisateurs",
             f"{path} = 0. Tout processus peut creer une instance io_uring ; utiliser 1 ou 2 reduit la surface d'attaque si les applications le permettent.",
+            "LOW",
+            verify=f"cat {path}",
+        )
+
+    # Le kernel peut charger a la demande une discipline de ligne TTY. Avec
+    # cette valeur a 0, seuls les processus ayant CAP_SYS_MODULE peuvent
+    # declencher cet autoload, ce qui reduit la surface exposee aux comptes locaux.
+    if scan_unprivileged_tty_ldisc_autoload() == 1:
+        path = "/proc/sys/dev/tty/ldisc_autoload"
+        m.add(
+            "Autoload TTY accessible aux utilisateurs non privilegies",
+            f"{path} = 1. Un compte local peut demander le chargement automatique d'une discipline TTY absente ; utiliser 0 si cette compatibilite n'est pas requise.",
             "LOW",
             verify=f"cat {path}",
         )

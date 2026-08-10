@@ -21,6 +21,7 @@ from hardaudit import (
     scan_fs_link_protections,
     scan_unrestricted_io_uring,
     scan_unprivileged_bpf,
+    scan_unprivileged_tty_ldisc_autoload,
     shadow_permissions_unsafe,
 )
 
@@ -129,6 +130,25 @@ class IoUringRestrictionTests(unittest.TestCase):
                     sysctl.write(value)
                     sysctl.flush()
                     self.assertIsNone(scan_unrestricted_io_uring(sysctl.name))
+
+
+class TtyLdiscAutoloadTests(unittest.TestCase):
+    def test_unprivileged_tty_ldisc_autoload_is_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("1\n")
+            sysctl.flush()
+            self.assertEqual(scan_unprivileged_tty_ldisc_autoload(sysctl.name), 1)
+
+        with patch("hardaudit.scan_unprivileged_tty_ldisc_autoload", return_value=1):
+            findings = [f for f in audit_kernel().findings if "Autoload TTY" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+
+    def test_representative_hardened_value_blocks_unprivileged_autoload(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("0\n")
+            sysctl.flush()
+            self.assertIsNone(scan_unprivileged_tty_ldisc_autoload(sysctl.name))
 
 
 class KernelSysctlSemanticsTests(unittest.TestCase):
