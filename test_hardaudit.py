@@ -25,6 +25,7 @@ from hardaudit import (
     scan_unprivileged_bpf,
     scan_unprivileged_tty_ldisc_autoload,
     scan_unprivileged_userfaultfd,
+    scan_unrestricted_unprivileged_userns,
     scan_zero_page_mappable,
     shadow_permissions_unsafe,
 )
@@ -154,6 +155,39 @@ class UserfaultfdRestrictionTests(unittest.TestCase):
             sysctl.write("0\n")
             sysctl.flush()
             self.assertIsNone(scan_unprivileged_userfaultfd(sysctl.name))
+
+
+class AppArmorUserNamespaceRestrictionTests(unittest.TestCase):
+    def _sysctl(self, value):
+        sysctl = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        sysctl.write(f"{value}\n")
+        sysctl.flush()
+        return sysctl
+
+    def test_enabled_userns_without_apparmor_restriction_is_reported(self):
+        with self._sysctl(1) as userns, self._sysctl(0) as restriction:
+            self.assertEqual(
+                scan_unrestricted_unprivileged_userns(userns.name, restriction.name),
+                (1, 0),
+            )
+
+        with patch("hardaudit.scan_unrestricted_unprivileged_userns", return_value=(1, 0)):
+            findings = [f for f in audit_kernel().findings if "namespaces utilisateur" in f.title.lower()]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("AppArmor", findings[0].detail)
+
+    def test_representative_ubuntu_apparmor_restriction_passes(self):
+        with self._sysctl(1) as userns, self._sysctl(1) as restriction:
+            self.assertIsNone(
+                scan_unrestricted_unprivileged_userns(userns.name, restriction.name)
+            )
+
+    def test_disabled_user_namespaces_pass_even_without_apparmor_restriction(self):
+        with self._sysctl(0) as userns, self._sysctl(0) as restriction:
+            self.assertIsNone(
+                scan_unrestricted_unprivileged_userns(userns.name, restriction.name)
+            )
 
 
 class NullPageMappingTests(unittest.TestCase):

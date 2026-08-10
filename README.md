@@ -111,7 +111,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 | Réseau | 12 | CIS 3.x | Écoutes sur toutes les interfaces, sans confondre écoute locale et exposition Internet |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
-| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié, io_uring et userfaultfd non restreints, page mémoire nulle, autoload des disciplines TTY, verrous kexec et modules, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
+| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié, io_uring et userfaultfd non restreints, namespaces utilisateur sans médiation AppArmor sur les kernels compatibles, page mémoire nulle, autoload des disciplines TTY, verrous kexec et modules, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
 | Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires supprimés encore actifs |
 | Filesystem | 10 | CIS 1.1 / ANSSI R28 | /tmp executable, world-writable, sticky bit, shadow |
 | Logs | 8 | CIS 4.x | auditd, rsyslog, logrotate |
@@ -180,6 +180,10 @@ sysctl kernel.io_uring_disabled
 sysctl vm.unprivileged_userfaultfd
 [ ! -e /dev/userfaultfd ] || stat -c '%A %U %G %n' /dev/userfaultfd
 
+# Sur les kernels Ubuntu compatibles : userns peut rester disponible tout en étant médié par AppArmor
+sysctl kernel.unprivileged_userns_clone kernel.apparmor_restrict_unprivileged_userns
+runuser -u nobody -- unshare --user --map-root-user true
+
 # Plancher des projections mémoire (0 = page nulle accessible, 65536 = valeur courante)
 sysctl vm.mmap_min_addr
 
@@ -199,6 +203,8 @@ lsmod
 > **Faux positif kexec :** conserver `kernel.kexec_load_disabled=0` est légitime sur un hôte utilisant `kexec` ou `kdump`. Ne jamais passer ce verrou à `1` avant d'avoir vérifié ces usages : le kernel documente qu'il ne peut plus être annulé avant un redémarrage.
 
 > **Faux positif modules :** conserver `kernel.modules_disabled=0` est normal sur une machine qui utilise le hotplug, DKMS ou charge encore des pilotes après le démarrage. La valeur `1` vise surtout les appliances stables ; elle bloque aussi le retrait des modules et ne peut plus être annulée avant un redémarrage.
+
+> **Faux positif userns :** navigateurs, sandbox et outils de conteneurs peuvent dépendre des namespaces utilisateur. HardAudit ne signale ce point que si le kernel expose la médiation AppArmor dédiée, que `unprivileged_userns_clone=1` et que cette médiation vaut `0` ; tester les profils applicatifs avant de l'activer.
 
 ---
 

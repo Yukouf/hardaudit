@@ -383,6 +383,24 @@ def scan_unprivileged_userfaultfd(path="/proc/sys/vm/unprivileged_userfaultfd"):
     return value if value == 1 else None
 
 
+def scan_unrestricted_unprivileged_userns(
+    userns_path="/proc/sys/kernel/unprivileged_userns_clone",
+    apparmor_path="/proc/sys/kernel/apparmor_restrict_unprivileged_userns",
+):
+    """Détecte le cas Ubuntu/AppArmor où userns est actif sans confinement dédié."""
+    try:
+        with open(userns_path, encoding="utf-8") as f:
+            userns_enabled = int(f.read().strip())
+        with open(apparmor_path, encoding="utf-8") as f:
+            apparmor_restricted = int(f.read().strip())
+    except (OSError, ValueError):
+        # Ce contrôle est spécifique aux kernels qui exposent les deux sysctl.
+        return None
+    if userns_enabled == 1 and apparmor_restricted == 0:
+        return userns_enabled, apparmor_restricted
+    return None
+
+
 def scan_zero_page_mappable(path="/proc/sys/vm/mmap_min_addr"):
     """Retourne 0 si les processus peuvent demander une projection a l'adresse nulle."""
     try:
@@ -483,6 +501,19 @@ def audit_kernel():
             f"{path} = 1. Un compte sans CAP_SYS_PTRACE peut aussi intercepter des fautes venant du kernel ; utiliser 0 sauf besoin documente. Verifier aussi les droits de /dev/userfaultfd s'il existe.",
             "LOW",
             verify=f"cat {path}; [ ! -e /dev/userfaultfd ] || stat -c '%A %U %G %n' /dev/userfaultfd",
+        )
+
+    # Certains kernels Ubuntu laissent userns disponible pour les applications
+    # tout en demandant à AppArmor de l'autoriser profil par profil. Ne signaler
+    # que les machines qui exposent explicitement ce mécanisme mais le désactivent.
+    if scan_unrestricted_unprivileged_userns() == (1, 0):
+        userns_path = "/proc/sys/kernel/unprivileged_userns_clone"
+        apparmor_path = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
+        m.add(
+            "Namespaces utilisateur non confines par AppArmor",
+            f"{userns_path} = 1 et {apparmor_path} = 0. Les comptes ordinaires peuvent creer un user namespace sans la mediation AppArmor prevue par ce kernel ; activer la restriction seulement apres avoir profile les navigateurs et conteneurs qui en dependent.",
+            "LOW",
+            verify=f"cat {userns_path} {apparmor_path}; runuser -u nobody -- unshare --user --map-root-user true",
         )
 
     # Interdire la premiere page empeche un processus non privilegie d'y placer
