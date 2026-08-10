@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from hardaudit import (
     Finding,
+    audit_kernel,
     audit_network,
     audit_users,
     classify_deleted_executable,
@@ -17,6 +18,7 @@ from hardaudit import (
     get_effective_sshd_settings,
     scan_deleted_executables,
     scan_fs_link_protections,
+    scan_unprivileged_bpf,
     shadow_permissions_unsafe,
 )
 
@@ -85,6 +87,25 @@ class FilesystemProtectionTests(unittest.TestCase):
                 "protected_regular": 2,
             })
             self.assertEqual(scan_fs_link_protections(root), [])
+
+
+class UnprivilegedBpfTests(unittest.TestCase):
+    def test_enabled_unprivileged_bpf_is_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("0\n")
+            sysctl.flush()
+            self.assertEqual(scan_unprivileged_bpf(sysctl.name), 0)
+
+        with patch("hardaudit.scan_unprivileged_bpf", return_value=0):
+            findings = [f for f in audit_kernel().findings if "BPF" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "MEDIUM")
+
+    def test_representative_ubuntu_default_disables_unprivileged_bpf(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("2\n")
+            sysctl.flush()
+            self.assertIsNone(scan_unprivileged_bpf(sysctl.name))
 
 
 class FalsePositiveRegressionTests(unittest.TestCase):

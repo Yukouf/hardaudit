@@ -323,6 +323,16 @@ def scan_fs_link_protections(sysctl_root="/proc/sys/fs"):
     return findings
 
 
+def scan_unprivileged_bpf(path="/proc/sys/kernel/unprivileged_bpf_disabled"):
+    """Retourne 0 si les appels BPF non privilegies sont autorises."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    return value if value == 0 else None
+
+
 def audit_kernel():
     m = Module("Kernel & Protections", 14, "CIS 1.6 / ANSSI R14")
     checks = {
@@ -353,6 +363,15 @@ def audit_kernel():
         m.add(
             title,
             f"{path} = {value} (minimum: {minimum}). Un autre utilisateur peut exploiter un fichier, lien ou FIFO piege dans un repertoire partage.",
+            "MEDIUM",
+            verify=f"cat {path}",
+        )
+
+    if scan_unprivileged_bpf() == 0:
+        path = "/proc/sys/kernel/unprivileged_bpf_disabled"
+        m.add(
+            "BPF accessible aux utilisateurs non privilegies",
+            f"{path} = 0. Le syscall bpf() reste disponible sans CAP_BPF ou CAP_SYS_ADMIN, ce qui elargit la surface d'attaque du kernel.",
             "MEDIUM",
             verify=f"cat {path}",
         )
