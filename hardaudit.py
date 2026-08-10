@@ -16,10 +16,11 @@ if not sys.stdout.isatty():
     for k in C: C[k] = ""
 
 class Finding:
-    def __init__(self, title, detail, severity="MEDIUM"):
+    def __init__(self, title, detail, severity="MEDIUM", verify=""):
         self.title = title
         self.detail = detail
         self.severity = severity  # LOW, MEDIUM, HIGH, CRITICAL
+        self.verify = verify
         self.penalty = {"LOW": 1, "MEDIUM": 3, "HIGH": 5, "CRITICAL": 10}[severity]
 
 class Module:
@@ -30,8 +31,8 @@ class Module:
         self.findings = []
         self.score = 0
 
-    def add(self, title, detail, sev="MEDIUM"):
-        self.findings.append(Finding(title, detail, sev))
+    def add(self, title, detail, sev="MEDIUM", verify=""):
+        self.findings.append(Finding(title, detail, sev, verify))
 
     def finalize(self):
         penalty = sum(f.penalty for f in self.findings)
@@ -46,12 +47,8 @@ def audit_users():
         m.add("Non-root", "Lancer avec sudo pour un audit complet.", "HIGH")
         return m
 
-    # Root accessible ?
-    try:
-        pw = pwd.getpwnam("root")
-        if pw.pw_shell not in ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false"):
-            m.add("Root login actif", f"Shell root = {pw.pw_shell}. Desactiver le login root direct.", "HIGH")
-    except: pass
+    # Le shell de root ne prouve pas que root peut se connecter a distance.
+    # Ce risque est controle dans le module SSH via PermitRootLogin.
 
     # Users avec UID 0 autre que root
     for p in pwd.getpwall():
@@ -80,7 +77,8 @@ def audit_users():
 
     # Mots de passe vides
     try:
-        shadow = open("/etc/shadow").read()
+        with open("/etc/shadow") as f:
+            shadow = f.read()
         for line in shadow.splitlines():
             if ":" in line:
                 parts = line.split(":")
@@ -94,6 +92,35 @@ def audit_users():
     return m
 
 
+def get_effective_sshd_settings(config_path="/etc/ssh/sshd_config"):
+    """Lit la configuration SSH effective, y compris valeurs par defaut et Include."""
+    try:
+        result = subprocess.run(
+            ["sshd", "-T", "-f", config_path],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            return {
+                line.split(None, 1)[0].lower(): line.split(None, 1)[1].strip().lower()
+                for line in result.stdout.splitlines() if len(line.split(None, 1)) == 2
+            }
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    # Repli limite : directives explicites du fichier principal seulement.
+    settings = {}
+    try:
+        with open(config_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                parts = line.split(None, 1)
+                if len(parts) == 2 and parts[0].lower() not in settings:
+                    settings[parts[0].lower()] = parts[1].strip().lower()
+    except OSError:
+        pass
+    return settings
+
+
 def audit_ssh():
     m = Module("SSH", 12, "CIS 5.2 / ANSSI R5")
     sshd = "/etc/ssh/sshd_config"
@@ -101,36 +128,44 @@ def audit_ssh():
         m.add("sshd_config absent", "SSH n'est pas installe ou config inaccessible.", "MEDIUM")
         m.finalize(); return m
 
+    settings = get_effective_sshd_settings(sshd)
+    verify = "sudo sshd -T | grep -E '^(permitrootlogin|passwordauthentication|x11forwarding|maxauthtries|clientaliveinterval) '"
+    if not settings:
+        m.add("Configuration SSH effective inaccessible", "Impossible d'executer sshd -T ou de lire la configuration.", "MEDIUM", verify)
+        m.finalize(); return m
+
+    permit_root = settings.get("permitrootlogin")
+    if permit_root != "no":
+        m.add(
+            f"PermitRootLogin effectif = {permit_root or 'inconnu'}",
+            "La configuration effective autorise encore root directement, au moins par cle.",
+            "HIGH" if permit_root == "yes" else "MEDIUM", verify,
+        )
+
+    password_auth = settings.get("passwordauthentication")
+    if password_auth != "no":
+        m.add(
+            f"PasswordAuthentication effectif = {password_auth or 'inconnu'}",
+            "Les mots de passe SSH restent autorises par la configuration effective.",
+            "MEDIUM", verify,
+        )
+
+    if settings.get("x11forwarding") != "no":
+        m.add("X11Forwarding actif", "Desactiver si le transfert d'affichage n'est pas utilise.", "LOW", verify)
+
     try:
-        with open(sshd) as f:
-            cfg = f.read()
+        max_auth = int(settings.get("maxauthtries", "6"))
+        if max_auth > 4:
+            m.add(f"MaxAuthTries effectif = {max_auth}", "Limiter a 4 essais ou moins.", "LOW", verify)
+    except ValueError:
+        m.add("MaxAuthTries invalide", "Valeur effective non numerique.", "LOW", verify)
 
-        checks = {
-            "PermitRootLogin": ("no", "HIGH", "Desactiver PermitRootLogin."),
-            "PasswordAuthentication": ("no", "MEDIUM", "Utiliser uniquement des cles SSH."),
-            "X11Forwarding": ("no", "LOW", "X11Forwarding expose l'affichage."),
-            "MaxAuthTries": ("4", "LOW", "MaxAuthTries > 4 recommandé."),
-            "ClientAliveInterval": ("300", "LOW", "Timeout idle recommande."),
-            "Protocol": ("2", "MEDIUM", "Forcer SSH Protocol 2 uniquement."),
-        }
-
-        for key, (expected, sev, msg) in checks.items():
-            found = re.search(rf"^\s*{key}\s+(.+)", cfg, re.MULTILINE)
-            if not found:
-                m.add(f"{key} non defini", msg, sev)
-            else:
-                val = found.group(1).split("#")[0].strip().lower()
-                if val != expected.lower() and expected != "4":  # MaxAuthTries <= 4 OK
-                    m.add(f"{key} = {val}", msg, sev)
-                elif key == "MaxAuthTries" and int(val) > 6:
-                    m.add(f"{key} = {val}", msg, sev)
-
-        # Port par defaut
-        port = re.search(r"^\s*Port\s+(\d+)", cfg, re.MULTILINE)
-        if not port or port.group(1) == "22":
-            m.add("Port SSH par defaut (22)", "Changer le port reduit le bruit des bots.", "LOW")
-    except Exception as e:
-        m.add("Erreur lecture SSH", str(e), "MEDIUM")
+    try:
+        idle = int(settings.get("clientaliveinterval", "0"))
+        if idle == 0 or idle > 300:
+            m.add(f"ClientAliveInterval effectif = {idle}", "Configurer un delai de session inactive entre 1 et 300 secondes.", "LOW", verify)
+    except ValueError:
+        m.add("ClientAliveInterval invalide", "Valeur effective non numerique.", "LOW", verify)
 
     m.finalize()
     return m
@@ -158,7 +193,8 @@ def audit_network():
                 if port in seen: continue
                 seen.add(port)
                 if port not in known_ok:
-                    m.add(f"Port {port} expose", f"Service en ecoute sur 0.0.0.0:{port}.", "MEDIUM")
+                    m.add(f"Port {port} expose", f"Service en ecoute sur 0.0.0.0:{port}.", "MEDIUM",
+                          verify=f"sudo ss -ltnp | grep ':{port} '")
 
         # IPv6 si pas utilise
         if os.path.exists("/proc/net/if_inet6"):
@@ -194,11 +230,22 @@ def audit_firewall():
             if has_ipt:
                 for line in ipt.stdout.splitlines():
                     if line.startswith("Chain INPUT") and "DROP" not in line:
-                        m.add("Politique INPUT != DROP", "iptables INPUT policy n'est pas DROP.", "HIGH")
+                        m.add("Politique INPUT != DROP", "iptables INPUT policy n'est pas DROP.", "HIGH",
+                              verify="sudo iptables -S INPUT")
                         break
     except: pass
     m.finalize()
     return m
+
+
+def classify_update_severity(total, security):
+    if security > 20:
+        return "CRITICAL"
+    if security > 0 or total > 20:
+        return "HIGH"
+    if total > 5:
+        return "MEDIUM"
+    return "LOW"
 
 
 def audit_updates():
@@ -208,13 +255,16 @@ def audit_updates():
         result = subprocess.run(["apt", "list", "--upgradable"], capture_output=True, text=True, timeout=10)
         updates = [l for l in result.stdout.splitlines() if "/" in l and "Listing" not in l]
         n = len(updates)
+        security_n = sum(1 for line in updates if "security" in line.lower())
 
-        if n > 50:
-            m.add(f"{n} mises a jour dispo", "Systeme critique — mettre a jour d'urgence.", "CRITICAL")
-        elif n > 20:
-            m.add(f"{n} mises a jour dispo", "Plus de 20 paquets a mettre a jour.", "HIGH")
-        elif n > 5:
-            m.add(f"{n} mises a jour dispo", "Paquets a mettre a jour.", "MEDIUM")
+        if n > 5:
+            severity = classify_update_severity(n, security_n)
+            m.add(
+                f"{n} mises a jour disponibles ({security_n} securite identifiees)",
+                "Le nombre total ne prouve pas que toutes sont des failles critiques.",
+                severity,
+                verify="apt list --upgradable 2>/dev/null",
+            )
 
         # Unattended-upgrades
         if not os.path.exists("/etc/apt/apt.conf.d/50unattended-upgrades"):
@@ -244,7 +294,8 @@ def audit_kernel():
             with open(path) as f:
                 val = f.read().strip()
             if val != expected:
-                m.add(msg, f"{path} = {val} (attendu: {expected})", sev)
+                m.add(msg, f"{path} = {val} (attendu: {expected})", sev,
+                      verify=f"cat {path}")
         except: pass
 
     # Kernel version
@@ -257,6 +308,27 @@ def audit_kernel():
 
     m.finalize()
     return m
+
+
+def classify_deleted_executable(target):
+    """Evalue le contexte sans confondre mise a jour et effacement suspect."""
+    clean_path = target[:-10] if target.endswith(" (deleted)") else target
+    suspicious_roots = ("/tmp/", "/var/tmp/", "/dev/shm/")
+    return "HIGH" if clean_path.startswith(suspicious_roots) else "LOW"
+
+
+def shadow_permissions_unsafe(mode, owner_uid, group_name):
+    """Accepte notamment le standard 0640 root:shadow, refuse les acces larges."""
+    mode = stat.S_IMODE(mode)
+    if owner_uid != 0:
+        return True
+    if mode & 0o007:  # aucun droit pour les autres
+        return True
+    if mode & 0o030:  # groupe: ni ecriture ni execution
+        return True
+    if mode & 0o040 and group_name not in ("root", "shadow"):
+        return True
+    return False
 
 
 def scan_deleted_executables(proc_root="/proc"):
@@ -313,11 +385,18 @@ def audit_services():
         # binaire. Cela peut etre legitime apres une mise a jour, mais aussi
         # indiquer qu'un malware essaie d'effacer sa trace sur le disque.
         for proc in scan_deleted_executables():
+            severity = classify_deleted_executable(proc["target"])
+            if severity == "HIGH":
+                title = "Binaire supprime dans un dossier temporaire"
+                context = "Chemin inhabituel : examiner rapidement le processus."
+            else:
+                title = "Service a redemarrer apres mise a jour"
+                context = "Frequent apres une mise a jour ; ce fait seul ne prouve pas un malware."
             m.add(
-                "Processus avec binaire supprime",
-                f"PID {proc['pid']} ({proc['name']}) execute encore {proc['target']}. "
-                f"Capturer /proc/{proc['pid']}/exe puis verifier le hash et l'origine du processus.",
-                "HIGH",
+                title,
+                f"PID {proc['pid']} ({proc['name']}) utilise encore {proc['target']}. {context}",
+                severity,
+                verify=f"sudo ls -l /proc/{proc['pid']}/exe; sudo ps -fp {proc['pid']}",
             )
     except: pass
     m.finalize()
@@ -336,7 +415,8 @@ def audit_filesystem():
         else:
             noexec = "noexec" in tmp_opts.stdout
         if not noexec:
-            m.add("/tmp executable", "Monter /tmp avec noexec,nosuid.", "MEDIUM")
+            m.add("/tmp executable", "Monter /tmp avec noexec,nosuid si compatible avec les applications.", "MEDIUM",
+                  verify="findmnt /tmp -o TARGET,OPTIONS")
 
         # World-writable files (echantillon rapide)
         r = subprocess.run(["find", "/etc", "-type", "f", "-perm", "-o+w", "-maxdepth", "2"],
@@ -351,11 +431,21 @@ def audit_filesystem():
         if not (tmp_stat.st_mode & stat.S_ISVTX):
             m.add("Sticky bit absent sur /tmp", "chmod +t /tmp", "HIGH")
 
-        # /etc/shadow permissions
+        # /etc/shadow doit appartenir a root. 0640 root:shadow est standard.
         try:
             shadow_stat = os.stat("/etc/shadow")
-            if shadow_stat.st_mode & 0o077:
-                m.add("/etc/shadow lisible", "Permissions trop larges sur /etc/shadow.", "CRITICAL")
+            try:
+                shadow_group = grp.getgrgid(shadow_stat.st_gid).gr_name
+            except KeyError:
+                shadow_group = str(shadow_stat.st_gid)
+            if shadow_permissions_unsafe(shadow_stat.st_mode, shadow_stat.st_uid, shadow_group):
+                mode = stat.S_IMODE(shadow_stat.st_mode)
+                m.add(
+                    "Permissions /etc/shadow dangereuses",
+                    f"Mode={mode:04o}, proprietaire UID={shadow_stat.st_uid}, groupe={shadow_group}.",
+                    "CRITICAL",
+                    verify="sudo stat -c '%a %U %G %n' /etc/shadow",
+                )
         except: pass
 
     except Exception as e:
@@ -369,7 +459,8 @@ def audit_logs():
     m = Module("Logs & Monitoring", 8, "CIS 4.x")
     try:
         if not os.path.exists("/etc/audit/auditd.conf"):
-            m.add("auditd absent", "Installer auditd pour tracer les evenements securite.", "MEDIUM")
+            m.add("auditd absent", "Installer auditd pour tracer les evenements securite.", "MEDIUM",
+                  verify="systemctl status auditd --no-pager")
 
         # rsyslog
         r = subprocess.run(["systemctl", "is-active", "rsyslog"], capture_output=True, timeout=3)
@@ -414,6 +505,8 @@ def print_finding(f, idx):
     cc = col.get(f.severity, C['W'])
     print(f"  {cc}{ico} [{f.severity:8s}] {f.title}{C['E']}")
     print(f"     {C['D']}{f.detail}{C['E']}")
+    if f.verify:
+        print(f"     {C['B']}Verifier : {f.verify}{C['E']}")
 
 def print_summary(modules):
     total = sum(m.score for m in modules)
@@ -432,7 +525,7 @@ def print_summary(modules):
         pct_m = int(m.score / m.weight * 100) if m.weight > 0 else 0
         col_m = C['G'] if pct_m >= 80 else C['Y'] if pct_m >= 50 else C['R']
         bar = "█" * (pct_m // 10) + "░" * (10 - pct_m // 10)
-        findings = sum(1 for f in m.findings if f.severity in ("HIGH", "CRITICAL"))
+        findings = len(m.findings)
         warn = f"{C['R']}⚠{findings}{C['E']}" if findings > 0 else f"{C['G']}✓{C['E']}"
         print(f"  {col_m}{bar}{C['E']} {m.name:<35} {col_m}{m.score}/{m.weight}{C['E']} {warn}")
 
@@ -467,6 +560,8 @@ def export_report(modules, filepath):
         for f in m.findings:
             lines.append(f"  [{f.severity}] {f.title}")
             lines.append(f"         {f.detail}")
+            if f.verify:
+                lines.append(f"         Verifier : {f.verify}")
         lines.append("")
 
     lines.append("=== FIN DU RAPPORT ===")
@@ -507,7 +602,8 @@ def main():
             "score": sum(m.score for m in modules),
             "max": sum(m.weight for m in modules),
             "modules": [{"name": m.name, "score": m.score, "max": m.weight,
-                         "findings": [{"title": f.title, "severity": f.severity, "detail": f.detail}
+                         "findings": [{"title": f.title, "severity": f.severity,
+                                       "detail": f.detail, "verify": f.verify}
                                       for f in m.findings]} for m in modules]
         }
         print(json.dumps(data, indent=2, ensure_ascii=False))

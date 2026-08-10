@@ -127,6 +127,31 @@ Chaque finding a une sévérité :
 
 ---
 
+## 🔎 Vérifier les résultats
+
+Chaque résultat sensible affiche désormais une ligne **`Verifier :`** avec la commande système indépendante qui permet de contrôler le fait observé. HardAudit ne doit donc pas être cru sur parole.
+
+Exemples :
+
+```bash
+# Permissions et propriétaire réels de /etc/shadow
+sudo stat -c '%a %U %G %n' /etc/shadow
+
+# Configuration SSH réellement appliquée (valeurs par défaut + Include)
+sudo sshd -T | grep -E '^(permitrootlogin|passwordauthentication|x11forwarding|maxauthtries|clientaliveinterval) '
+
+# Programme associé à un port
+sudo ss -ltnp
+
+# Processus utilisant encore un ancien binaire après mise à jour
+sudo ls -l /proc/PID/exe
+sudo ps -fp PID
+```
+
+> **Important :** le score est un indicateur de triage, pas une certification CIS/ANSSI. Un finding prouve une configuration observée, pas automatiquement une compromission. Le contexte de la machine reste indispensable.
+
+---
+
 ## 🎬 Ce que ça donne en vrai
 
 ```bash
