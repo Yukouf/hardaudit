@@ -333,6 +333,22 @@ def scan_unprivileged_bpf(path="/proc/sys/kernel/unprivileged_bpf_disabled"):
     return value if value == 0 else None
 
 
+def kernel_sysctl_is_unsafe(name, value, expected=None):
+    """Compare un sysctl sans signaler comme faible un mode plus strict."""
+    minimums = {
+        "kernel.kptr_restrict": 1,
+        "kernel.yama.ptrace_scope": 1,
+    }
+    if name in minimums:
+        try:
+            return int(value) < minimums[name]
+        except ValueError:
+            return True
+    if expected is None:
+        expected = {"kernel.dmesg_restrict": "1"}.get(name)
+    return expected is not None and value != expected
+
+
 def audit_kernel():
     m = Module("Kernel & Protections", 14, "CIS 1.6 / ANSSI R14")
     checks = {
@@ -352,8 +368,13 @@ def audit_kernel():
         try:
             with open(path) as f:
                 val = f.read().strip()
-            if val != expected:
-                m.add(msg, f"{path} = {val} (attendu: {expected})", sev,
+            prefix = "/proc/sys/"
+            name = path[len(prefix):].replace("/", ".") if path.startswith(prefix) else path
+            if kernel_sysctl_is_unsafe(name, val, expected):
+                comparator = "minimum" if name in (
+                    "kernel.kptr_restrict", "kernel.yama.ptrace_scope"
+                ) else "attendu"
+                m.add(msg, f"{path} = {val} ({comparator}: {expected})", sev,
                       verify=f"cat {path}")
         except: pass
 

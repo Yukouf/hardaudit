@@ -16,6 +16,7 @@ from hardaudit import (
     firewall_has_default_deny,
     print_finding,
     get_effective_sshd_settings,
+    kernel_sysctl_is_unsafe,
     scan_deleted_executables,
     scan_fs_link_protections,
     scan_unprivileged_bpf,
@@ -106,6 +107,21 @@ class UnprivilegedBpfTests(unittest.TestCase):
             sysctl.write("2\n")
             sysctl.flush()
             self.assertIsNone(scan_unprivileged_bpf(sysctl.name))
+
+
+class KernelSysctlSemanticsTests(unittest.TestCase):
+    def test_kptr_restrict_stronger_mode_is_accepted(self):
+        self.assertFalse(kernel_sysctl_is_unsafe("kernel.kptr_restrict", "2"))
+
+    def test_kptr_restrict_disabled_mode_is_rejected(self):
+        self.assertTrue(kernel_sysctl_is_unsafe("kernel.kptr_restrict", "0"))
+
+    def test_stricter_ptrace_scope_is_accepted(self):
+        self.assertFalse(kernel_sysctl_is_unsafe("kernel.yama.ptrace_scope", "3"))
+
+    def test_exact_boolean_control_stays_exact(self):
+        self.assertTrue(kernel_sysctl_is_unsafe("kernel.dmesg_restrict", "0"))
+        self.assertFalse(kernel_sysctl_is_unsafe("kernel.dmesg_restrict", "1"))
 
 
 class FalsePositiveRegressionTests(unittest.TestCase):
