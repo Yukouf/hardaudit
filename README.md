@@ -164,6 +164,9 @@ sudo ps -fp PID
 # Protections contre les fichiers et liens piégés dans les dossiers partagés
 sysctl fs.protected_hardlinks fs.protected_symlinks fs.protected_fifos fs.protected_regular
 
+# Core dumps privilégiés : 0 = désactivés ; 1 = dangereux ; 2 = sûr seulement avec pipe ou chemin absolu
+sysctl fs.suid_dumpable kernel.core_pattern
+
 # Masquage des pointeurs kernel (0 = exposés, 1 = restreints, 2 = masqués même pour root)
 sysctl kernel.kptr_restrict
 
@@ -217,6 +220,8 @@ cat /proc/cmdline
 
 > **Faux positif JIT BPF :** le mode `2` durcit aussi les programmes chargés par des processus privilégiés mais peut coûter en performances. Le mode `1` peut être un compromis acceptable, surtout si le BPF non privilégié est déjà bloqué ; le finding reste donc `LOW` et doit être arbitré selon les usages réseau et observabilité.
 
+> **Faux positif core dumps SUID :** `fs.suid_dumpable=2` n'est pas automatiquement dangereux. Le kernel l'autorise avec un `core_pattern` dirigé vers un handler (`|...`) ou un chemin absolu ; HardAudit vérifie désormais les deux valeurs ensemble. Le mode `1`, lui, reste réservé au débogage car il permet aux utilisateurs ordinaires d'examiner la mémoire de processus privilégiés.
+
 ---
 
 ## 🎬 Ce que ça donne en vrai
@@ -244,8 +249,6 @@ $ sudo python3 hardaudit.py
   [7/14] Kernel & Protections  CIS 1.6 / ANSSI R14
   ⚠ [MEDIUM  ] IP forwarding actif
      /proc/sys/net/ipv4/ip_forward = 1 (attendu: 0)
-  ⚠ [MEDIUM  ] Core dumps SUID actifs
-     /proc/sys/fs/suid_dumpable = 2 (attendu: 0)
 
   [0/10] Système de fichiers  CIS 1.1 / ANSSI R28
   ☠ [CRITICAL] /etc/shadow lisible

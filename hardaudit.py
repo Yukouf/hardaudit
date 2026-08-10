@@ -323,6 +323,26 @@ def scan_fs_link_protections(sysctl_root="/proc/sys/fs"):
     return findings
 
 
+def scan_unsafe_suid_dumps(
+    suid_dumpable_path="/proc/sys/fs/suid_dumpable",
+    core_pattern_path="/proc/sys/kernel/core_pattern",
+):
+    """Retourne les reglages dangereux de core dump des processus privilegies."""
+    try:
+        with open(suid_dumpable_path, encoding="utf-8") as f:
+            mode = int(f.read().strip())
+        with open(core_pattern_path, encoding="utf-8") as f:
+            pattern = f.read().strip()
+    except (OSError, ValueError):
+        return None
+
+    # Mode 1 retire les protections. Le mode 2 n'est sur, d'apres la
+    # documentation du kernel, qu'avec un handler pipe ou un chemin absolu.
+    if mode == 1 or (mode == 2 and not pattern.startswith(("|", "/"))):
+        return mode, pattern
+    return None
+
+
 def scan_unprivileged_bpf(path="/proc/sys/kernel/unprivileged_bpf_disabled"):
     """Retourne 0 si les appels BPF non privilegies sont autorises."""
     try:
@@ -463,7 +483,6 @@ def audit_kernel():
         "/proc/sys/net/ipv4/conf/all/accept_source_route": ("0", "Source routing accepte", "HIGH"),
         "/proc/sys/net/ipv4/conf/all/accept_redirects": ("0", "ICMP redirects acceptes", "MEDIUM"),
         "/proc/sys/net/ipv4/conf/all/send_redirects": ("0", "ICMP redirects envoyes", "LOW"),
-        "/proc/sys/fs/suid_dumpable": ("0", "Core dumps SUID actifs", "MEDIUM"),
     }
 
     for path, (expected, msg, sev) in checks.items():
@@ -480,6 +499,21 @@ def audit_kernel():
                 m.add(msg, f"{path} = {val} ({comparator}: {expected})", sev,
                       verify=f"cat {path}")
         except: pass
+
+    unsafe_suid_dumps = scan_unsafe_suid_dumps()
+    if unsafe_suid_dumps is not None:
+        mode, pattern = unsafe_suid_dumps
+        reason = (
+            "le mode debug retire les protections des processus privilegies"
+            if mode == 1 else
+            "le mode suidsafe exige un handler pipe ou un chemin absolu"
+        )
+        m.add(
+            "Core dumps SUID actifs sans destination sure",
+            f"fs.suid_dumpable = {mode}, kernel.core_pattern = {pattern!r} : {reason}.",
+            "MEDIUM",
+            verify="sysctl fs.suid_dumpable kernel.core_pattern",
+        )
 
     # Ces sysctl bloquent plusieurs pieges inter-utilisateurs dans les
     # repertoires partages (notamment /tmp), meme si le sticky bit est present.

@@ -22,6 +22,7 @@ from hardaudit import (
     scan_kexec_enabled,
     scan_deleted_executables,
     scan_fs_link_protections,
+    scan_unsafe_suid_dumps,
     scan_unrestricted_io_uring,
     scan_unprivileged_bpf,
     scan_unprivileged_tty_ldisc_autoload,
@@ -96,6 +97,37 @@ class FilesystemProtectionTests(unittest.TestCase):
                 "protected_regular": 2,
             })
             self.assertEqual(scan_fs_link_protections(root), [])
+
+
+class SuidCoreDumpTests(unittest.TestCase):
+    def _sysctl(self, value):
+        sysctl = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        sysctl.write(f"{value}\n")
+        sysctl.flush()
+        return sysctl
+
+    def test_debug_mode_exposes_privileged_process_memory(self):
+        with self._sysctl(1) as mode, self._sysctl("core") as pattern:
+            self.assertEqual(
+                scan_unsafe_suid_dumps(mode.name, pattern.name),
+                (1, "core"),
+            )
+
+    def test_suidsafe_mode_requires_pipe_or_absolute_path(self):
+        with self._sysctl(2) as mode, self._sysctl("core.%p") as pattern:
+            self.assertEqual(
+                scan_unsafe_suid_dumps(mode.name, pattern.name),
+                (2, "core.%p"),
+            )
+
+    def test_representative_apport_pipe_is_accepted(self):
+        apport = "|/usr/share/apport/apport -p%p -s%s -- %E"
+        with self._sysctl(2) as mode, self._sysctl(apport) as pattern:
+            self.assertIsNone(scan_unsafe_suid_dumps(mode.name, pattern.name))
+
+        with patch("hardaudit.scan_unsafe_suid_dumps", return_value=None):
+            findings = [f for f in audit_kernel().findings if "Core dumps SUID" in f.title]
+        self.assertEqual(findings, [])
 
 
 class UnprivilegedBpfTests(unittest.TestCase):
