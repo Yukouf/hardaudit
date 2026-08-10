@@ -333,6 +333,16 @@ def scan_unprivileged_bpf(path="/proc/sys/kernel/unprivileged_bpf_disabled"):
     return value if value == 0 else None
 
 
+def scan_unrestricted_io_uring(path="/proc/sys/kernel/io_uring_disabled"):
+    """Retourne 0 lorsque tous les utilisateurs peuvent creer une instance io_uring."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    return value if value == 0 else None
+
+
 def kernel_sysctl_is_unsafe(name, value, expected=None):
     """Compare un sysctl sans signaler comme faible un mode plus strict."""
     minimums = {
@@ -397,6 +407,18 @@ def audit_kernel():
             "BPF accessible aux utilisateurs non privilegies",
             f"{path} = 0. Le syscall bpf() reste disponible sans CAP_BPF ou CAP_SYS_ADMIN, ce qui elargit la surface d'attaque du kernel.",
             "MEDIUM",
+            verify=f"cat {path}",
+        )
+
+    # La documentation du kernel indique explicitement que restreindre
+    # io_uring reduit sa surface d'attaque. Les modes 1 (groupe dedie) et 2
+    # (desactivation globale) sont acceptes pour les machines qui en ont besoin.
+    if scan_unrestricted_io_uring() == 0:
+        path = "/proc/sys/kernel/io_uring_disabled"
+        m.add(
+            "io_uring accessible a tous les utilisateurs",
+            f"{path} = 0. Tout processus peut creer une instance io_uring ; utiliser 1 ou 2 reduit la surface d'attaque si les applications le permettent.",
+            "LOW",
             verify=f"cat {path}",
         )
 

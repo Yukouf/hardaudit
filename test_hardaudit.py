@@ -19,6 +19,7 @@ from hardaudit import (
     kernel_sysctl_is_unsafe,
     scan_deleted_executables,
     scan_fs_link_protections,
+    scan_unrestricted_io_uring,
     scan_unprivileged_bpf,
     shadow_permissions_unsafe,
 )
@@ -107,6 +108,27 @@ class UnprivilegedBpfTests(unittest.TestCase):
             sysctl.write("2\n")
             sysctl.flush()
             self.assertIsNone(scan_unprivileged_bpf(sysctl.name))
+
+
+class IoUringRestrictionTests(unittest.TestCase):
+    def test_unrestricted_io_uring_is_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("0\n")
+            sysctl.flush()
+            self.assertEqual(scan_unrestricted_io_uring(sysctl.name), 0)
+
+        with patch("hardaudit.scan_unrestricted_io_uring", return_value=0):
+            findings = [f for f in audit_kernel().findings if "io_uring" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+
+    def test_representative_restricted_modes_pass(self):
+        for value in ("1\n", "2\n"):
+            with self.subTest(value=value.strip()):
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+                    sysctl.write(value)
+                    sysctl.flush()
+                    self.assertIsNone(scan_unrestricted_io_uring(sysctl.name))
 
 
 class KernelSysctlSemanticsTests(unittest.TestCase):
