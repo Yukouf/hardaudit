@@ -57,21 +57,34 @@ sudo python3 hardaudit.py
 
 ---
 
-## ⚡ Quick Start
+## ⚡ Installation
 
 ```bash
-# 1. Copier le script sur la VM
-scp hardaudit.py user@vm-auditer:/tmp/
-
-# 2. Lancer (en root pour un audit complet)
-ssh user@vm-auditer
-sudo python3 /tmp/hardaudit.py
-
-# 3. Exporter le rapport
-sudo python3 /tmp/hardaudit.py -o rapport.txt
+curl -fsSL https://raw.githubusercontent.com/Yukouf/hardaudit/main/hardaudit.py \
+  | sudo tee /usr/local/bin/hardaudit >/dev/null \
+  && sudo chmod +x /usr/local/bin/hardaudit
 ```
 
-C'est tout. Pas de pip install. Pas de virtualenv. Pas de Docker. **Python 3.8+ et c'est bon.**
+Puis lance l'audit depuis n'importe quel dossier :
+
+```bash
+sudo hardaudit
+```
+
+Exporter un rapport ou obtenir du JSON :
+
+```bash
+sudo hardaudit -o rapport.txt
+sudo hardaudit --json
+```
+
+Désinstaller :
+
+```bash
+sudo rm /usr/local/bin/hardaudit
+```
+
+Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 
 ---
 
