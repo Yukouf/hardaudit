@@ -78,6 +78,14 @@ sudo hardaudit -o rapport.txt
 sudo hardaudit --json
 ```
 
+Adapter le score au contexte métier sans masquer les preuves :
+
+```bash
+sudo hardaudit --allow-port 3306 --allow-port 10050
+```
+
+Les ports déclarés restent visibles en `INFO` dans le terminal, le TXT et le JSON, mais ne réduisent plus le score. N'utilise cette option qu'après avoir identifié le processus et validé que l'écoute est intentionnelle.
+
 Désinstaller :
 
 ```bash
@@ -215,7 +223,13 @@ HardAudit, c'est l'outil que tu balances en 2 secondes sur une VM pour avoir un 
 
 ---
 
-## 🛣️ Roadmap
+## 🔬 Comparaison avec les références
+
+La comparaison documentée avec Lynis, OpenSCAP, CIS-CAT, Tiger, osquery et Wazuh SCA est disponible dans [`COMPARAISON_REFERENCES.md`](COMPARAISON_REFERENCES.md). HardAudit reprend des **concepts génériques** — profils, statuts par règle, preuves et suivi de conformité — mais ne copie ni code GPL ni contenu propriétaire CIS.
+
+---
+
+## 🗺️ Roadmap
 
 - [x] 9 modules d'audit
 - [x] Scoring sur 100 + grades A-F

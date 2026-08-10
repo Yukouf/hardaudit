@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from hardaudit import (
     Finding,
+    audit_network,
     audit_users,
     classify_deleted_executable,
     classify_update_severity,
@@ -147,6 +148,22 @@ class FalsePositiveRegressionTests(unittest.TestCase):
             "LISTEN 0 128 *:10050 *:*",
         ])
         self.assertEqual(extract_unreviewed_wildcard_ports(output), ["3306", "10050"])
+
+    def test_info_finding_has_no_score_penalty(self):
+        self.assertEqual(Finding("Contexte", "Attendu", "INFO").penalty, 0)
+
+    @patch("hardaudit._capture")
+    def test_allowed_port_stays_visible_without_penalty(self, capture):
+        capture.return_value = (0, "LISTEN 0 128 0.0.0.0:3306 0.0.0.0:*\nLISTEN 0 128 *:10050 *:*")
+        module = audit_network(allowed_ports={"3306"})
+        self.assertEqual(module.score, 9)
+        self.assertEqual(
+            [(finding.severity, finding.title) for finding in module.findings],
+            [
+                ("MEDIUM", "1 port(s) en ecoute sur toutes les interfaces"),
+                ("INFO", "1 port(s) attendu(s) selon le contexte fourni"),
+            ],
+        )
 
 
 if __name__ == "__main__":

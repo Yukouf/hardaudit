@@ -19,9 +19,9 @@ class Finding:
     def __init__(self, title, detail, severity="MEDIUM", verify=""):
         self.title = title
         self.detail = detail
-        self.severity = severity  # LOW, MEDIUM, HIGH, CRITICAL
+        self.severity = severity  # INFO, LOW, MEDIUM, HIGH, CRITICAL
         self.verify = verify
-        self.penalty = {"LOW": 1, "MEDIUM": 3, "HIGH": 5, "CRITICAL": 10}[severity]
+        self.penalty = {"INFO": 0, "LOW": 1, "MEDIUM": 3, "HIGH": 5, "CRITICAL": 10}[severity]
 
 class Module:
     def __init__(self, name, weight, ref=""):
@@ -206,21 +206,31 @@ def _capture(command):
         return 127, ""
 
 
-def audit_network():
+def audit_network(allowed_ports=None):
     m = Module("Reseau & Ports", 12, "CIS 3.x")
+    allowed_ports = {str(port) for port in (allowed_ports or set())}
     try:
         # Une écoute wildcard est un fait local. L'exposition externe dépend du firewall.
         code, output = _capture(["ss", "-tlnp"])
         if code != 0:
             _, output = _capture(["netstat", "-tlnp"])
         ports = extract_unreviewed_wildcard_ports(output)
-        if ports:
-            listed = ", ".join(ports)
+        unreviewed = [port for port in ports if port not in allowed_ports]
+        expected = [port for port in ports if port in allowed_ports]
+        if unreviewed:
+            listed = ", ".join(unreviewed)
             m.add(
-                f"{len(ports)} port(s) en ecoute sur toutes les interfaces",
+                f"{len(unreviewed)} port(s) en ecoute sur toutes les interfaces",
                 f"Ports: {listed}. Cela ne prouve pas une accessibilite depuis Internet ; verifier le firewall et les besoins metier.",
                 "MEDIUM",
                 verify="sudo ss -ltnp; sudo ufw status verbose; sudo nft list ruleset",
+            )
+        if expected:
+            m.add(
+                f"{len(expected)} port(s) attendu(s) selon le contexte fourni",
+                f"Ports: {', '.join(expected)}. Ils restent affiches pour la tracabilite mais ne reduisent pas le score.",
+                "INFO",
+                verify="sudo ss -ltnp",
             )
     except Exception as e:
         m.add("Erreur audit reseau", str(e), "MEDIUM")
@@ -548,8 +558,8 @@ def print_header(module, score, max_score):
     print(f"\n{C['BO']}  [{col}{score}/{max_score}{C['E']}{C['BO']}] {module.name}{C['E']}  {C['D']}{module.ref}{C['E']}")
 
 def print_finding(f, idx):
-    icon = {"LOW": "i", "MEDIUM": "⚠", "HIGH": "▲", "CRITICAL": "☠"}
-    col = {"LOW": C['B'], "MEDIUM": C['Y'], "HIGH": C['R'], "CRITICAL": C['R']+C['BO']}
+    icon = {"INFO": "i", "LOW": "i", "MEDIUM": "⚠", "HIGH": "▲", "CRITICAL": "☠"}
+    col = {"INFO": C['D'], "LOW": C['B'], "MEDIUM": C['Y'], "HIGH": C['R'], "CRITICAL": C['R']+C['BO']}
     ico = icon.get(f.severity, "!")
     cc = col.get(f.severity, C['W'])
     print(f"  {cc}{ico} [{f.severity:8s}] {f.title}{C['E']}")
@@ -627,6 +637,8 @@ def main():
     parser.add_argument("--json", action="store_true", help="Sortie JSON")
     parser.add_argument("--quiet", action="store_true", help="Score uniquement")
     parser.add_argument("-o", "--output", help="Export rapport TXT")
+    parser.add_argument("--allow-port", action="append", default=[], metavar="PORT",
+                        help="Port wildcard attendu : reste visible en INFO sans penalite (repetable)")
     args = parser.parse_args()
 
     if os.geteuid() != 0 and not args.quiet:
@@ -635,7 +647,7 @@ def main():
     modules = [
         audit_users(),
         audit_ssh(),
-        audit_network(),
+        audit_network(set(args.allow_port)),
         audit_firewall(),
         audit_updates(),
         audit_kernel(),
