@@ -15,6 +15,7 @@ from hardaudit import (
     print_finding,
     get_effective_sshd_settings,
     scan_deleted_executables,
+    scan_fs_link_protections,
     shadow_permissions_unsafe,
 )
 
@@ -52,6 +53,37 @@ class DeletedExecutableTests(unittest.TestCase):
 
     def test_deleted_binary_in_temporary_directory_is_high_risk(self):
         self.assertEqual(classify_deleted_executable("/tmp/.cache-agent (deleted)"), "HIGH")
+
+
+class FilesystemProtectionTests(unittest.TestCase):
+    def _write_sysctls(self, root, values):
+        for name, value in values.items():
+            with open(os.path.join(root, name), "w", encoding="utf-8") as f:
+                f.write(f"{value}\n")
+
+    def test_disabled_protections_are_reported_but_stronger_value_is_accepted(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_sysctls(root, {
+                "protected_hardlinks": 0,
+                "protected_symlinks": 1,
+                "protected_fifos": 0,
+                "protected_regular": 2,
+            })
+            findings = scan_fs_link_protections(root)
+            self.assertEqual(
+                [finding[0] for finding in findings],
+                ["Hardlinks non proteges", "FIFO non proteges"],
+            )
+
+    def test_representative_hardened_linux_values_pass(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_sysctls(root, {
+                "protected_hardlinks": 1,
+                "protected_symlinks": 1,
+                "protected_fifos": 1,
+                "protected_regular": 2,
+            })
+            self.assertEqual(scan_fs_link_protections(root), [])
 
 
 class FalsePositiveRegressionTests(unittest.TestCase):

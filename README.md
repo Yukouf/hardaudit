@@ -97,7 +97,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 | Réseau | 12 | CIS 3.x | Écoutes sur toutes les interfaces, sans confondre écoute locale et exposition Internet |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
-| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, kptr_restrict, ptrace_scope, syncookies |
+| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, syncookies, protections hardlink/symlink/FIFO/fichiers de `/tmp` |
 | Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires supprimés encore actifs |
 | Filesystem | 10 | CIS 1.1 / ANSSI R28 | /tmp executable, world-writable, sticky bit, shadow |
 | Logs | 8 | CIS 4.x | auditd, rsyslog, logrotate |
@@ -146,6 +146,9 @@ sudo ss -ltnp
 # Processus utilisant encore un ancien binaire après mise à jour
 sudo ls -l /proc/PID/exe
 sudo ps -fp PID
+
+# Protections contre les fichiers et liens piégés dans les dossiers partagés
+sysctl fs.protected_hardlinks fs.protected_symlinks fs.protected_fifos fs.protected_regular
 ```
 
 > **Important :** le score est un indicateur de triage, pas une certification CIS/ANSSI. Un finding prouve une configuration observée, pas automatiquement une compromission. Le contexte de la machine reste indispensable.

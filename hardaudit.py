@@ -292,6 +292,27 @@ def audit_updates():
     return m
 
 
+def scan_fs_link_protections(sysctl_root="/proc/sys/fs"):
+    """Retourne les protections de fichiers temporaires absentes ou trop faibles."""
+    checks = {
+        "protected_hardlinks": (1, "Hardlinks non proteges"),
+        "protected_symlinks": (1, "Symlinks non proteges"),
+        "protected_fifos": (1, "FIFO non proteges"),
+        "protected_regular": (1, "Fichiers reguliers non proteges"),
+    }
+    findings = []
+    for name, (minimum, title) in checks.items():
+        path = os.path.join(sysctl_root, name)
+        try:
+            with open(path, encoding="utf-8") as f:
+                value = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        if value < minimum:
+            findings.append((title, path, value, minimum))
+    return findings
+
+
 def audit_kernel():
     m = Module("Kernel & Protections", 14, "CIS 1.6 / ANSSI R14")
     checks = {
@@ -315,6 +336,16 @@ def audit_kernel():
                 m.add(msg, f"{path} = {val} (attendu: {expected})", sev,
                       verify=f"cat {path}")
         except: pass
+
+    # Ces sysctl bloquent plusieurs pieges inter-utilisateurs dans les
+    # repertoires partages (notamment /tmp), meme si le sticky bit est present.
+    for title, path, value, minimum in scan_fs_link_protections():
+        m.add(
+            title,
+            f"{path} = {value} (minimum: {minimum}). Un autre utilisateur peut exploiter un fichier, lien ou FIFO piege dans un repertoire partage.",
+            "MEDIUM",
+            verify=f"cat {path}",
+        )
 
     # Kernel version
     try:
