@@ -23,6 +23,7 @@ from hardaudit import (
     scan_unrestricted_io_uring,
     scan_unprivileged_bpf,
     scan_unprivileged_tty_ldisc_autoload,
+    scan_unprivileged_userfaultfd,
     shadow_permissions_unsafe,
 )
 
@@ -131,6 +132,26 @@ class IoUringRestrictionTests(unittest.TestCase):
                     sysctl.write(value)
                     sysctl.flush()
                     self.assertIsNone(scan_unrestricted_io_uring(sysctl.name))
+
+
+class UserfaultfdRestrictionTests(unittest.TestCase):
+    def test_unrestricted_userfaultfd_is_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("1\n")
+            sysctl.flush()
+            self.assertEqual(scan_unprivileged_userfaultfd(sysctl.name), 1)
+
+        with patch("hardaudit.scan_unprivileged_userfaultfd", return_value=1):
+            findings = [f for f in audit_kernel().findings if "userfaultfd" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("/dev/userfaultfd", findings[0].detail)
+
+    def test_representative_kernel_default_restricts_userfaultfd(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("0\n")
+            sysctl.flush()
+            self.assertIsNone(scan_unprivileged_userfaultfd(sysctl.name))
 
 
 class TtyLdiscAutoloadTests(unittest.TestCase):

@@ -111,7 +111,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 | Réseau | 12 | CIS 3.x | Écoutes sur toutes les interfaces, sans confondre écoute locale et exposition Internet |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
-| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié, io_uring non restreint, autoload des disciplines TTY, verrou kexec, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
+| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié, io_uring et userfaultfd non restreints, autoload des disciplines TTY, verrou kexec, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
 | Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires supprimés encore actifs |
 | Filesystem | 10 | CIS 1.1 / ANSSI R28 | /tmp executable, world-writable, sticky bit, shadow |
 | Logs | 8 | CIS 4.x | auditd, rsyslog, logrotate |
@@ -175,6 +175,10 @@ sysctl kernel.perf_event_paranoid
 
 # Création d'instances io_uring (0 = tous, 1 = groupe dédié, 2 = désactivée)
 sysctl kernel.io_uring_disabled
+
+# Interception userfaultfd des fautes kernel (0 = CAP_SYS_PTRACE requis, 1 = non restreint)
+sysctl vm.unprivileged_userfaultfd
+[ ! -e /dev/userfaultfd ] || stat -c '%A %U %G %n' /dev/userfaultfd
 
 # Autoload des disciplines TTY (0 = réservé à CAP_SYS_MODULE, 1 = non privilégié)
 sysctl dev.tty.ldisc_autoload

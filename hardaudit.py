@@ -363,6 +363,16 @@ def scan_kexec_enabled(path="/proc/sys/kernel/kexec_load_disabled"):
     return value if value == 0 else None
 
 
+def scan_unprivileged_userfaultfd(path="/proc/sys/vm/unprivileged_userfaultfd"):
+    """Retourne 1 si userfaultfd peut intercepter des fautes kernel sans privilege."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    return value if value == 1 else None
+
+
 def kernel_sysctl_is_unsafe(name, value, expected=None):
     """Compare un sysctl sans signaler comme faible un mode plus strict."""
     minimums = {
@@ -440,6 +450,19 @@ def audit_kernel():
             f"{path} = 0. Tout processus peut creer une instance io_uring ; utiliser 1 ou 2 reduit la surface d'attaque si les applications le permettent.",
             "LOW",
             verify=f"cat {path}",
+        )
+
+    # Avec 0, les comptes sans CAP_SYS_PTRACE restent limites aux fautes en
+    # espace utilisateur. La documentation upstream indique explicitement que
+    # cette restriction peut rendre certaines vulnerabilites plus difficiles
+    # a exploiter. /dev/userfaultfd doit etre audite separement s'il existe.
+    if scan_unprivileged_userfaultfd() == 1:
+        path = "/proc/sys/vm/unprivileged_userfaultfd"
+        m.add(
+            "userfaultfd non restreint pour les utilisateurs",
+            f"{path} = 1. Un compte sans CAP_SYS_PTRACE peut aussi intercepter des fautes venant du kernel ; utiliser 0 sauf besoin documente. Verifier aussi les droits de /dev/userfaultfd s'il existe.",
+            "LOW",
+            verify=f"cat {path}; [ ! -e /dev/userfaultfd ] || stat -c '%A %U %G %n' /dev/userfaultfd",
         )
 
     # Le kernel peut charger a la demande une discipline de ligne TTY. Avec
