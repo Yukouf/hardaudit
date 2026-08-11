@@ -111,7 +111,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 | Réseau | 12 | CIS 3.x | Écoutes sur toutes les interfaces, sans confondre écoute locale et exposition Internet |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
-| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié et durcissement du JIT BPF, io_uring et userfaultfd non restreints, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor sur les kernels compatibles, page mémoire nulle, autoload des disciplines TTY, verrous kexec/modules/Lockdown, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
+| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié et durcissement du JIT BPF, io_uring et userfaultfd non restreints, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor sur les kernels compatibles, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrous kexec/modules/Lockdown, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
 | Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires supprimés encore actifs |
 | Filesystem | 10 | CIS 1.1 / ANSSI R28 | /tmp executable, world-writable, sticky bit, shadow |
 | Logs | 8 | CIS 4.x | auditd, rsyslog, logrotate |
@@ -199,6 +199,9 @@ sysctl vm.mmap_min_addr
 # Autoload des disciplines TTY (0 = réservé à CAP_SYS_MODULE, 1 = non privilégié)
 sysctl dev.tty.ldisc_autoload
 
+# Injection de frappes TIOCSTI (0 = réservé à CAP_SYS_ADMIN, 1 = comportement historique)
+sysctl dev.tty.legacy_tiocsti
+
 # Verrou kexec (1 = aucun nouveau kernel chargeable, irréversible jusqu'au redémarrage)
 sysctl kernel.kexec_load_disabled
 
@@ -226,6 +229,8 @@ cat /proc/cmdline
 > **Faux positif core dumps SUID :** `fs.suid_dumpable=2` n'est pas automatiquement dangereux. Le kernel l'autorise avec un `core_pattern` dirigé vers un handler (`|...`) ou un chemin absolu ; HardAudit vérifie désormais les deux valeurs ensemble. Le mode `1`, lui, reste réservé au débogage car il permet aux utilisateurs ordinaires d'examiner la mémoire de processus privilégiés.
 
 > **Faux positif memfd :** des runtimes, navigateurs ou moteurs JIT peuvent légitimement exécuter du code depuis un memfd. Le mode `1` conserve cette possibilité avec `MFD_EXEC` explicite ; le mode `2` la bloque et doit être testé avec les applications avant déploiement.
+
+> **Faux positif TIOCSTI :** certains logiciels historiques de terminal peuvent encore dépendre de cette injection. La valeur `0` convient à la plupart des systèmes modernes, mais les processus ayant `CAP_SYS_ADMIN` restent autorisés ; valider les outils d'accessibilité et de terminal avant déploiement global.
 
 ---
 

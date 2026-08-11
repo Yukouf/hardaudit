@@ -26,6 +26,7 @@ from hardaudit import (
     scan_unsafe_suid_dumps,
     scan_unrestricted_io_uring,
     scan_unprivileged_bpf,
+    scan_legacy_tiocsti_enabled,
     scan_unprivileged_tty_ldisc_autoload,
     scan_unprivileged_userfaultfd,
     scan_unrestricted_unprivileged_userns,
@@ -310,6 +311,25 @@ class TtyLdiscAutoloadTests(unittest.TestCase):
             sysctl.write("0\n")
             sysctl.flush()
             self.assertIsNone(scan_unprivileged_tty_ldisc_autoload(sysctl.name))
+
+
+class LegacyTiocstiTests(unittest.TestCase):
+    def test_legacy_terminal_injection_is_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("1\n")
+            sysctl.flush()
+            self.assertEqual(scan_legacy_tiocsti_enabled(sysctl.name), 1)
+
+        with patch("hardaudit.scan_legacy_tiocsti_enabled", return_value=1):
+            findings = [f for f in audit_kernel().findings if "TIOCSTI" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+
+    def test_representative_hardened_value_blocks_legacy_injection(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
+            sysctl.write("0\n")
+            sysctl.flush()
+            self.assertIsNone(scan_legacy_tiocsti_enabled(sysctl.name))
 
 
 class KexecRestrictionTests(unittest.TestCase):

@@ -383,6 +383,16 @@ def scan_unprivileged_tty_ldisc_autoload(path="/proc/sys/dev/tty/ldisc_autoload"
     return value if value == 1 else None
 
 
+def scan_legacy_tiocsti_enabled(path="/proc/sys/dev/tty/legacy_tiocsti"):
+    """Retourne 1 si l'injection TIOCSTI historique reste permise sans CAP_SYS_ADMIN."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    return value if value == 1 else None
+
+
 def scan_kexec_enabled(path="/proc/sys/kernel/kexec_load_disabled"):
     """Retourne 0 si le chargement d'un nouveau kernel par kexec reste autorise."""
     try:
@@ -628,6 +638,18 @@ def audit_kernel():
         m.add(
             "Autoload TTY accessible aux utilisateurs non privilegies",
             f"{path} = 1. Un compte local peut demander le chargement automatique d'une discipline TTY absente ; utiliser 0 si cette compatibilite n'est pas requise.",
+            "LOW",
+            verify=f"cat {path}",
+        )
+
+    # TIOCSTI peut pousser des caracteres dans un terminal de controle. Le
+    # kernel qualifie cette interface historique de mecanisme d'escalade
+    # dangereux ; la valeur 0 la reserve aux processus ayant CAP_SYS_ADMIN.
+    if scan_legacy_tiocsti_enabled() == 1:
+        path = "/proc/sys/dev/tty/legacy_tiocsti"
+        m.add(
+            "Injection terminal TIOCSTI historique autorisee",
+            f"{path} = 1. Un processus partageant un terminal peut y injecter des frappes ; utiliser 0 sauf dependance ancienne confirmee (les processus CAP_SYS_ADMIN restent autorises).",
             "LOW",
             verify=f"cat {path}",
         )
