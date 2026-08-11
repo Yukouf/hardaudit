@@ -25,6 +25,7 @@ from hardaudit import (
     scan_deleted_executables,
     scan_fs_link_protections,
     scan_proc_hidepid,
+    scan_unsafe_ipv4_redirect_senders,
     scan_unsafe_ipv4_redirects,
     scan_unprotected_reverse_paths,
     scan_unsafe_suid_dumps,
@@ -207,7 +208,7 @@ class IcmpRedirectTests(unittest.TestCase):
         with patch(
             "hardaudit.scan_unsafe_ipv4_redirects",
             return_value=[("eth0", 0, 1, 0)],
-        ):
+        ), patch("hardaudit.scan_unsafe_ipv4_redirect_senders", return_value=[]):
             findings = [f for f in audit_network().findings if "redirects ICMP" in f.title]
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0].severity, "MEDIUM")
@@ -235,6 +236,58 @@ class IcmpRedirectTests(unittest.TestCase):
                 else all_value == 1 or interface_value == 1
             )
             self.assertTrue(expected)
+
+
+class IcmpRedirectSenderTests(unittest.TestCase):
+    def _write_interface(self, root, interface, send_redirects, forwarding):
+        interface_dir = os.path.join(root, interface)
+        os.makedirs(interface_dir)
+        for name, value in (
+            ("send_redirects", send_redirects),
+            ("forwarding", forwarding),
+        ):
+            with open(os.path.join(interface_dir, name), "w", encoding="utf-8") as f:
+                f.write(f"{value}\n")
+
+    def test_local_value_enables_redirects_even_when_all_is_zero(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_interface(root, "all", 0, 1)
+            self._write_interface(root, "default", 0, 1)
+            self._write_interface(root, "eth0", 1, 1)
+            self._write_interface(root, "eth1", 0, 1)
+            self._write_interface(root, "lo", 1, 1)
+            self.assertEqual(
+                scan_unsafe_ipv4_redirect_senders(root),
+                [("eth0", 0, 1, 1)],
+            )
+
+        with patch(
+            "hardaudit.scan_unsafe_ipv4_redirect_senders",
+            return_value=[("eth0", 0, 1, 1)],
+        ), patch("hardaudit.scan_unsafe_ipv4_redirects", return_value=[]):
+            findings = [f for f in audit_network().findings if "Emission effective" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("eth0", findings[0].detail)
+
+    def test_non_router_does_not_send_redirects_even_when_sysctl_is_enabled(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_interface(root, "all", 1, 0)
+            self._write_interface(root, "default", 1, 0)
+            self._write_interface(root, "eth0", 1, 0)
+            self._write_interface(root, "lo", 1, 0)
+            self.assertEqual(scan_unsafe_ipv4_redirect_senders(root), [])
+
+    def test_live_values_are_evaluated_without_modification(self):
+        root = "/proc/sys/net/ipv4/conf"
+        if not os.path.exists(os.path.join(root, "all", "send_redirects")):
+            self.skipTest("IPv4 redirect sender controls are not exposed by this kernel")
+        findings = scan_unsafe_ipv4_redirect_senders(root)
+        self.assertIsInstance(findings, list)
+        for interface, all_value, interface_value, forwarding in findings:
+            self.assertNotIn(interface, ("all", "default", "lo"))
+            self.assertEqual(forwarding, 1)
+            self.assertTrue(all_value == 1 or interface_value == 1)
 
 
 class SuidCoreDumpTests(unittest.TestCase):
@@ -673,8 +726,11 @@ class FalsePositiveRegressionTests(unittest.TestCase):
     def test_info_finding_has_no_score_penalty(self):
         self.assertEqual(Finding("Contexte", "Attendu", "INFO").penalty, 0)
 
+    @patch("hardaudit.scan_unsafe_ipv4_redirect_senders", return_value=[])
+    @patch("hardaudit.scan_unsafe_ipv4_redirects", return_value=[])
+    @patch("hardaudit.scan_unprotected_reverse_paths", return_value=[])
     @patch("hardaudit._capture")
-    def test_allowed_port_stays_visible_without_penalty(self, capture):
+    def test_allowed_port_stays_visible_without_penalty(self, capture, _rp, _accept, _send):
         capture.return_value = (0, "LISTEN 0 128 0.0.0.0:3306 0.0.0.0:*\nLISTEN 0 128 *:10050 *:*")
         module = audit_network(allowed_ports={"3306"})
         self.assertEqual(module.score, 9)

@@ -266,6 +266,34 @@ def scan_unsafe_ipv4_redirects(root="/proc/sys/net/ipv4/conf"):
     return findings
 
 
+def scan_unsafe_ipv4_redirect_senders(root="/proc/sys/net/ipv4/conf"):
+    """Liste les interfaces routeur qui envoient effectivement des redirects ICMP."""
+    try:
+        with open(os.path.join(root, "all", "send_redirects"), encoding="utf-8") as f:
+            all_value = int(f.read().strip())
+        interfaces = os.listdir(root)
+    except (OSError, ValueError):
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            with open(os.path.join(root, interface, "send_redirects"), encoding="utf-8") as f:
+                interface_value = int(f.read().strip())
+            with open(os.path.join(root, interface, "forwarding"), encoding="utf-8") as f:
+                forwarding = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+
+        # Le kernel active send_redirects si "all" OU l'interface vaut 1,
+        # mais un hote qui ne route pas n'emet pas ces messages.
+        if forwarding == 1 and (all_value == 1 or interface_value == 1):
+            findings.append((interface, all_value, interface_value, forwarding))
+    return findings
+
+
 def audit_network(allowed_ports=None):
     m = Module("Reseau & Ports", 12, "CIS 3.x")
     allowed_ports = {str(port) for port in (allowed_ports or set())}
@@ -311,6 +339,16 @@ def audit_network(allowed_ports=None):
                 f"Interfaces concernees : {interfaces}. Sur un hote, une valeur locale a 1 suffit meme si conf/all vaut 0 ; un voisin reseau peut alors tenter de modifier la route utilisee. Desactiver apres verification des besoins de routage.",
                 "MEDIUM",
                 verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*/}{accept_redirects,forwarding} 2>/dev/null",
+            )
+
+        redirect_senders = scan_unsafe_ipv4_redirect_senders()
+        if redirect_senders:
+            interfaces = ", ".join(item[0] for item in redirect_senders)
+            m.add(
+                "Emission effective de redirects ICMP IPv4",
+                f"Interfaces routeur concernees : {interfaces}. Une valeur locale a 1 suffit meme si conf/all vaut 0 ; ces messages peuvent faire choisir une autre passerelle aux machines voisines. Desactiver sauf besoin de routage explicite.",
+                "LOW",
+                verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*/}{send_redirects,forwarding} 2>/dev/null",
             )
     except Exception as e:
         m.add("Erreur audit reseau", str(e), "MEDIUM")
@@ -627,7 +665,6 @@ def audit_kernel():
         "/proc/sys/net/ipv4/tcp_syncookies": ("1", "TCP syncookies off", "MEDIUM"),
         "/proc/sys/net/ipv4/ip_forward": ("0", "IP forwarding actif", "MEDIUM"),
         "/proc/sys/net/ipv4/conf/all/accept_source_route": ("0", "Source routing accepte", "HIGH"),
-        "/proc/sys/net/ipv4/conf/all/send_redirects": ("0", "ICMP redirects envoyes", "LOW"),
     }
 
     for path, (expected, msg, sev) in checks.items():
