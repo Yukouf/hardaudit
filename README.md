@@ -111,7 +111,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 | Réseau | 12 | CIS 3.x | Écoutes sur toutes les interfaces, sans confondre écoute locale et exposition Internet |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
-| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié et durcissement du JIT BPF, io_uring et userfaultfd non restreints, namespaces utilisateur sans médiation AppArmor sur les kernels compatibles, page mémoire nulle, autoload des disciplines TTY, verrous kexec/modules/Lockdown, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
+| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié et durcissement du JIT BPF, io_uring et userfaultfd non restreints, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor sur les kernels compatibles, page mémoire nulle, autoload des disciplines TTY, verrous kexec/modules/Lockdown, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
 | Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires supprimés encore actifs |
 | Filesystem | 10 | CIS 1.1 / ANSSI R28 | /tmp executable, world-writable, sticky bit, shadow |
 | Logs | 8 | CIS 4.x | auditd, rsyslog, logrotate |
@@ -186,6 +186,9 @@ sysctl kernel.io_uring_disabled
 sysctl vm.unprivileged_userfaultfd
 [ ! -e /dev/userfaultfd ] || stat -c '%A %U %G %n' /dev/userfaultfd
 
+# Exécution depuis un fichier anonyme memfd (0 = implicite, 1 = explicite, 2 = refusée)
+sysctl vm.memfd_noexec
+
 # Sur les kernels Ubuntu compatibles : userns peut rester disponible tout en étant médié par AppArmor
 sysctl kernel.unprivileged_userns_clone kernel.apparmor_restrict_unprivileged_userns
 runuser -u nobody -- unshare --user --map-root-user true
@@ -221,6 +224,8 @@ cat /proc/cmdline
 > **Faux positif JIT BPF :** le mode `2` durcit aussi les programmes chargés par des processus privilégiés mais peut coûter en performances. Le mode `1` peut être un compromis acceptable, surtout si le BPF non privilégié est déjà bloqué ; le finding reste donc `LOW` et doit être arbitré selon les usages réseau et observabilité.
 
 > **Faux positif core dumps SUID :** `fs.suid_dumpable=2` n'est pas automatiquement dangereux. Le kernel l'autorise avec un `core_pattern` dirigé vers un handler (`|...`) ou un chemin absolu ; HardAudit vérifie désormais les deux valeurs ensemble. Le mode `1`, lui, reste réservé au débogage car il permet aux utilisateurs ordinaires d'examiner la mémoire de processus privilégiés.
+
+> **Faux positif memfd :** des runtimes, navigateurs ou moteurs JIT peuvent légitimement exécuter du code depuis un memfd. Le mode `1` conserve cette possibilité avec `MFD_EXEC` explicite ; le mode `2` la bloque et doit être testé avec les applications avant déploiement.
 
 ---
 

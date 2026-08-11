@@ -413,6 +413,16 @@ def scan_unprivileged_userfaultfd(path="/proc/sys/vm/unprivileged_userfaultfd"):
     return value if value == 1 else None
 
 
+def scan_executable_memfd_default(path="/proc/sys/vm/memfd_noexec"):
+    """Retourne 0 lorsque memfd_create() produit un fichier executable par defaut."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    return value if value == 0 else None
+
+
 def scan_unrestricted_unprivileged_userns(
     userns_path="/proc/sys/kernel/unprivileged_userns_clone",
     apparmor_path="/proc/sys/kernel/apparmor_restrict_unprivileged_userns",
@@ -571,6 +581,18 @@ def audit_kernel():
             f"{path} = 1. Un compte sans CAP_SYS_PTRACE peut aussi intercepter des fautes venant du kernel ; utiliser 0 sauf besoin documente. Verifier aussi les droits de /dev/userfaultfd s'il existe.",
             "LOW",
             verify=f"cat {path}; [ ! -e /dev/userfaultfd ] || stat -c '%A %U %G %n' /dev/userfaultfd",
+        )
+
+    # Depuis Linux 6.3, ce réglage permet de ne plus rendre implicitement
+    # exécutables les fichiers anonymes créés par memfd_create(). Le mode 1
+    # exige une demande explicite ; le mode 2 refuse même cette demande.
+    if scan_executable_memfd_default() == 0:
+        path = "/proc/sys/vm/memfd_noexec"
+        m.add(
+            "Fichiers memfd executables par defaut",
+            f"{path} = 0. memfd_create() implique encore MFD_EXEC, ce qui facilite l'execution de code sans fichier persistant ; utiliser 1, ou 2 si aucun runtime ne requiert de memfd executable.",
+            "LOW",
+            verify=f"cat {path}",
         )
 
     # Certains kernels Ubuntu laissent userns disponible pour les applications
