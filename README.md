@@ -108,7 +108,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 |---|---|---|---|
 | Utilisateurs | 12 | CIS 5.x | Root accessible, UID 0 non-root, sudo sans mdp, umask |
 | SSH | 12 | CIS 5.2 / ANSSI R5 | PermitRootLogin, PasswordAuth, X11Forwarding, port |
-| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), acceptation et émission effectives des redirects ICMP IPv4 par interface |
+| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), routage inhabituel de `127/8`, acceptation et émission effectives des redirects ICMP IPv4 par interface |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
 | Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié et durcissement du JIT BPF, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrous kexec/modules/Lockdown, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
@@ -160,6 +160,10 @@ sudo ss -ltnp
 # Validation de l'adresse source IPv4 (0 = absente, 1 = stricte, 2 = souple)
 sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter
 grep -H . /proc/sys/net/ipv4/conf/*/rp_filter
+
+# Routage des adresses loopback 127/8 hors de l'hôte (1 = autorisé)
+grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/route_localnet 2>/dev/null
+sudo nft list ruleset
 
 # Redirects ICMP IPv4 : la règle effective dépend aussi du mode hôte/routeur de chaque interface
 grep -H . /proc/sys/net/ipv4/conf/{all,default,*/}{accept_redirects,forwarding} 2>/dev/null
@@ -254,6 +258,8 @@ cat /proc/cmdline
 > **Faux positif core dumps SUID :** `fs.suid_dumpable=2` n'est pas automatiquement dangereux. Le kernel l'autorise avec un `core_pattern` dirigé vers un handler (`|...`) ou un chemin absolu ; HardAudit vérifie désormais les deux valeurs ensemble. Le mode `1`, lui, reste réservé au débogage car il permet aux utilisateurs ordinaires d'examiner la mémoire de processus privilégiés.
 
 > **Faux positif rp_filter :** le mode strict `1` peut casser le routage asymétrique ou certains montages multi-interface. Le mode souple `2` vérifie que la source est joignable par une interface et constitue alors le compromis documenté par le kernel ; HardAudit accepte les deux et tient compte du maximum entre `conf/all` et chaque interface.
+
+> **Faux positif route_localnet :** les proxies transparents et certaines publications de ports conteneurisés utilisent volontairement le routage de `127/8`. La valeur `all=1` **ou** celle d'une interface à `1` suffit ; vérifier les règles NAT avant de désactiver ce mode. Le finding signale que la barrière loopback est retirée, pas qu'un service est déjà exposé.
 
 > **Faux positif redirects ICMP :** un routeur administré peut utiliser volontairement les redirects. HardAudit calcule la règle documentée par le kernel par interface : en mode hôte, `all=1` **ou** `interface=1` suffit ; avec le forwarding actif, les deux doivent valoir `1`. Le finding prouve l'acceptation locale, pas une attaque en cours.
 

@@ -26,6 +26,7 @@ from hardaudit import (
     scan_fs_link_protections,
     scan_mount_options,
     scan_proc_hidepid,
+    scan_routed_loopback_interfaces,
     scan_unsafe_ipv4_redirect_senders,
     scan_unsafe_ipv4_redirects,
     scan_unprotected_reverse_paths,
@@ -177,6 +178,43 @@ class SharedMemoryMountTests(unittest.TestCase):
         if options is None:
             self.skipTest("/dev/shm is not a distinct mount")
         self.assertIn("rw", options)
+
+
+class RoutedLoopbackTests(unittest.TestCase):
+    def _write_route_localnet(self, root, interface, value):
+        interface_dir = os.path.join(root, interface)
+        os.makedirs(interface_dir, exist_ok=True)
+        with open(os.path.join(interface_dir, "route_localnet"), "w", encoding="utf-8") as f:
+            f.write(str(value))
+
+    def test_detects_only_real_interfaces_that_route_127_over_ipv4(self):
+        with tempfile.TemporaryDirectory() as root:
+            for interface, value in (
+                ("all", 0), ("default", 1), ("lo", 1),
+                ("eth0", 1), ("eth1", 0),
+            ):
+                self._write_route_localnet(root, interface, value)
+            self.assertEqual(scan_routed_loopback_interfaces(root), [("eth0", 0, 1)])
+
+            self._write_route_localnet(root, "all", 1)
+            self.assertEqual(
+                scan_routed_loopback_interfaces(root),
+                [("eth0", 1, 1), ("eth1", 1, 0)],
+            )
+
+        with patch("hardaudit.scan_routed_loopback_interfaces", return_value=[("eth0", 0, 1)]):
+            findings = [f for f in audit_network().findings if "loopback" in f.title.lower()]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "MEDIUM")
+        self.assertIn("127/8", findings[0].detail)
+
+    def test_live_route_localnet_values_are_exercised_read_only(self):
+        root = "/proc/sys/net/ipv4/conf"
+        if not os.path.exists(os.path.join(root, "all", "route_localnet")):
+            self.skipTest("route_localnet is not exposed by this kernel")
+        findings = scan_routed_loopback_interfaces(root)
+        self.assertTrue(all(all_value == 1 or local_value == 1
+                            for _, all_value, local_value in findings))
 
 
 class ReversePathFilteringTests(unittest.TestCase):

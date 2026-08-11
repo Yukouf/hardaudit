@@ -232,6 +232,31 @@ def scan_unprotected_reverse_paths(root="/proc/sys/net/ipv4/conf"):
     return findings
 
 
+def scan_routed_loopback_interfaces(root="/proc/sys/net/ipv4/conf"):
+    """Liste les interfaces où 127/8 peut être routé hors du loopback."""
+    try:
+        with open(os.path.join(root, "all", "route_localnet"), encoding="utf-8") as f:
+            all_value = int(f.read().strip())
+        interfaces = os.listdir(root)
+    except (OSError, ValueError):
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            with open(os.path.join(root, interface, "route_localnet"), encoding="utf-8") as f:
+                interface_value = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        # Le kernel utilise IN_DEV_ORCONF : la valeur "all" OU celle de
+        # l'interface suffit à autoriser le routage des adresses 127/8.
+        if all_value == 1 or interface_value == 1:
+            findings.append((interface, all_value, interface_value))
+    return findings
+
+
 def scan_unsafe_ipv4_redirects(root="/proc/sys/net/ipv4/conf"):
     """Liste les interfaces qui acceptent effectivement les redirects ICMP IPv4."""
     try:
@@ -329,6 +354,16 @@ def audit_network(allowed_ports=None):
                 f"rp_filter vaut effectivement 0 sur : {interfaces}. Le mode 1 est strict ; utiliser 2 si le routage asymetrique exige un mode plus compatible.",
                 "LOW",
                 verify="sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter; grep -H . /proc/sys/net/ipv4/conf/*/rp_filter",
+            )
+
+        routed_loopback = scan_routed_loopback_interfaces()
+        if routed_loopback:
+            interfaces = ", ".join(item[0] for item in routed_loopback)
+            m.add(
+                "Adresses loopback routables hors de l'hote",
+                f"route_localnet autorise effectivement 127/8 sur : {interfaces}. Ce mode sert aux proxies transparents et a certaines redirections NAT, mais retire la protection qui traite normalement ces adresses comme impossibles sur le reseau.",
+                "MEDIUM",
+                verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/route_localnet 2>/dev/null; sudo nft list ruleset; sudo iptables-save",
             )
 
         redirect_findings = scan_unsafe_ipv4_redirects()
