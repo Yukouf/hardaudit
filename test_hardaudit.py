@@ -25,6 +25,7 @@ from hardaudit import (
     scan_deleted_executables,
     scan_fs_link_protections,
     scan_proc_hidepid,
+    scan_unsafe_ipv4_redirects,
     scan_unprotected_reverse_paths,
     scan_unsafe_suid_dumps,
     scan_unrestricted_io_uring,
@@ -179,6 +180,61 @@ class ReversePathFilteringTests(unittest.TestCase):
         for interface, all_value, interface_value in findings:
             self.assertNotEqual(interface, "lo")
             self.assertEqual(max(all_value, interface_value), 0)
+
+
+class IcmpRedirectTests(unittest.TestCase):
+    def _write_interface(self, root, interface, accept_redirects, forwarding):
+        interface_dir = os.path.join(root, interface)
+        os.makedirs(interface_dir)
+        for name, value in (
+            ("accept_redirects", accept_redirects),
+            ("forwarding", forwarding),
+        ):
+            with open(os.path.join(interface_dir, name), "w", encoding="utf-8") as f:
+                f.write(f"{value}\n")
+
+    def test_host_interface_can_accept_redirects_even_when_all_is_zero(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_interface(root, "all", 0, 0)
+            self._write_interface(root, "default", 0, 0)
+            self._write_interface(root, "eth0", 1, 0)
+            self._write_interface(root, "lo", 1, 0)
+            self.assertEqual(
+                scan_unsafe_ipv4_redirects(root),
+                [("eth0", 0, 1, 0)],
+            )
+
+        with patch(
+            "hardaudit.scan_unsafe_ipv4_redirects",
+            return_value=[("eth0", 0, 1, 0)],
+        ):
+            findings = [f for f in audit_network().findings if "redirects ICMP" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "MEDIUM")
+        self.assertIn("eth0", findings[0].detail)
+
+    def test_router_requires_both_all_and_interface_to_accept_redirects(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_interface(root, "all", 0, 1)
+            self._write_interface(root, "default", 0, 1)
+            self._write_interface(root, "eth0", 1, 1)
+            self._write_interface(root, "lo", 1, 1)
+            self.assertEqual(scan_unsafe_ipv4_redirects(root), [])
+
+    def test_live_values_are_evaluated_without_modification(self):
+        root = "/proc/sys/net/ipv4/conf"
+        if not os.path.exists(os.path.join(root, "all", "accept_redirects")):
+            self.skipTest("IPv4 redirect controls are not exposed by this kernel")
+        findings = scan_unsafe_ipv4_redirects(root)
+        self.assertIsInstance(findings, list)
+        for interface, all_value, interface_value, forwarding in findings:
+            self.assertNotIn(interface, ("all", "default", "lo"))
+            expected = (
+                all_value == 1 and interface_value == 1
+                if forwarding == 1
+                else all_value == 1 or interface_value == 1
+            )
+            self.assertTrue(expected)
 
 
 class SuidCoreDumpTests(unittest.TestCase):

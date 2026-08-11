@@ -232,6 +232,40 @@ def scan_unprotected_reverse_paths(root="/proc/sys/net/ipv4/conf"):
     return findings
 
 
+def scan_unsafe_ipv4_redirects(root="/proc/sys/net/ipv4/conf"):
+    """Liste les interfaces qui acceptent effectivement les redirects ICMP IPv4."""
+    try:
+        with open(os.path.join(root, "all", "accept_redirects"), encoding="utf-8") as f:
+            all_value = int(f.read().strip())
+        interfaces = os.listdir(root)
+    except (OSError, ValueError):
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            with open(os.path.join(root, interface, "accept_redirects"), encoding="utf-8") as f:
+                interface_value = int(f.read().strip())
+            with open(os.path.join(root, interface, "forwarding"), encoding="utf-8") as f:
+                forwarding = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+
+        # D'après la documentation réseau du kernel, un routeur exige que
+        # "all" ET l'interface acceptent les redirects. Un hôte les accepte
+        # dès que "all" OU l'interface les autorise.
+        enabled = (
+            all_value == 1 and interface_value == 1
+            if forwarding == 1
+            else all_value == 1 or interface_value == 1
+        )
+        if enabled:
+            findings.append((interface, all_value, interface_value, forwarding))
+    return findings
+
+
 def audit_network(allowed_ports=None):
     m = Module("Reseau & Ports", 12, "CIS 3.x")
     allowed_ports = {str(port) for port in (allowed_ports or set())}
@@ -267,6 +301,16 @@ def audit_network(allowed_ports=None):
                 f"rp_filter vaut effectivement 0 sur : {interfaces}. Le mode 1 est strict ; utiliser 2 si le routage asymetrique exige un mode plus compatible.",
                 "LOW",
                 verify="sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter; grep -H . /proc/sys/net/ipv4/conf/*/rp_filter",
+            )
+
+        redirect_findings = scan_unsafe_ipv4_redirects()
+        if redirect_findings:
+            interfaces = ", ".join(item[0] for item in redirect_findings)
+            m.add(
+                "Acceptation effective des redirects ICMP IPv4",
+                f"Interfaces concernees : {interfaces}. Sur un hote, une valeur locale a 1 suffit meme si conf/all vaut 0 ; un voisin reseau peut alors tenter de modifier la route utilisee. Desactiver apres verification des besoins de routage.",
+                "MEDIUM",
+                verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*/}{accept_redirects,forwarding} 2>/dev/null",
             )
     except Exception as e:
         m.add("Erreur audit reseau", str(e), "MEDIUM")
@@ -583,7 +627,6 @@ def audit_kernel():
         "/proc/sys/net/ipv4/tcp_syncookies": ("1", "TCP syncookies off", "MEDIUM"),
         "/proc/sys/net/ipv4/ip_forward": ("0", "IP forwarding actif", "MEDIUM"),
         "/proc/sys/net/ipv4/conf/all/accept_source_route": ("0", "Source routing accepte", "HIGH"),
-        "/proc/sys/net/ipv4/conf/all/accept_redirects": ("0", "ICMP redirects acceptes", "MEDIUM"),
         "/proc/sys/net/ipv4/conf/all/send_redirects": ("0", "ICMP redirects envoyes", "LOW"),
     }
 
