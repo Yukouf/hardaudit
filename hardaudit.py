@@ -373,6 +373,24 @@ def scan_unrestricted_io_uring(path="/proc/sys/kernel/io_uring_disabled"):
     return value if value == 0 else None
 
 
+def scan_unmediated_unprivileged_io_uring(
+    io_uring_path="/proc/sys/kernel/io_uring_disabled",
+    apparmor_path="/proc/sys/kernel/apparmor_restrict_unprivileged_io_uring",
+):
+    """Détecte io_uring ouvert sans la médiation AppArmor optionnelle d'Ubuntu."""
+    try:
+        with open(io_uring_path, encoding="utf-8") as f:
+            io_uring_policy = int(f.read().strip())
+        with open(apparmor_path, encoding="utf-8") as f:
+            apparmor_policy = int(f.read().strip())
+    except (OSError, ValueError):
+        # Cette interface AppArmor n'existe que sur les kernels compatibles.
+        return None
+    if io_uring_policy == 0 and apparmor_policy == 0:
+        return io_uring_policy, apparmor_policy
+    return None
+
+
 def scan_unprivileged_tty_ldisc_autoload(path="/proc/sys/dev/tty/ldisc_autoload"):
     """Retourne 1 si un utilisateur sans CAP_SYS_MODULE peut demander un ldisc."""
     try:
@@ -573,11 +591,24 @@ def audit_kernel():
     # (desactivation globale) sont acceptes pour les machines qui en ont besoin.
     if scan_unrestricted_io_uring() == 0:
         path = "/proc/sys/kernel/io_uring_disabled"
+        unmediated = scan_unmediated_unprivileged_io_uring() == (0, 0)
+        detail = (
+            f"{path} = 0 et kernel.apparmor_restrict_unprivileged_io_uring = 0. "
+            "Tout processus peut creer une instance io_uring sans la mediation AppArmor "
+            "optionnelle de ce kernel ; activer cette mediation, ou utiliser le mode global "
+            "1/2 apres test de compatibilite."
+            if unmediated else
+            f"{path} = 0. Tout processus peut creer une instance io_uring ; utiliser 1 ou 2 "
+            "reduit la surface d'attaque si les applications le permettent."
+        )
         m.add(
             "io_uring accessible a tous les utilisateurs",
-            f"{path} = 0. Tout processus peut creer une instance io_uring ; utiliser 1 ou 2 reduit la surface d'attaque si les applications le permettent.",
+            detail,
             "LOW",
-            verify=f"cat {path}",
+            verify=(
+                f"cat {path}; [ ! -e /proc/sys/kernel/apparmor_restrict_unprivileged_io_uring ] "
+                "|| cat /proc/sys/kernel/apparmor_restrict_unprivileged_io_uring"
+            ),
         )
 
     # Avec 0, les comptes sans CAP_SYS_PTRACE restent limites aux fautes en

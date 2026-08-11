@@ -25,6 +25,7 @@ from hardaudit import (
     scan_fs_link_protections,
     scan_unsafe_suid_dumps,
     scan_unrestricted_io_uring,
+    scan_unmediated_unprivileged_io_uring,
     scan_unprivileged_bpf,
     scan_legacy_tiocsti_enabled,
     scan_unprivileged_tty_ldisc_autoload,
@@ -197,6 +198,50 @@ class IoUringRestrictionTests(unittest.TestCase):
                     sysctl.write(value)
                     sysctl.flush()
                     self.assertIsNone(scan_unrestricted_io_uring(sysctl.name))
+
+
+class AppArmorIoUringMediationTests(unittest.TestCase):
+    def _sysctl(self, value):
+        sysctl = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        sysctl.write(f"{value}\n")
+        sysctl.flush()
+        return sysctl
+
+    def test_available_but_disabled_mediation_is_reported(self):
+        with self._sysctl(0) as global_policy, self._sysctl(0) as apparmor_policy:
+            self.assertEqual(
+                scan_unmediated_unprivileged_io_uring(
+                    global_policy.name, apparmor_policy.name
+                ),
+                (0, 0),
+            )
+
+        with patch(
+            "hardaudit.scan_unmediated_unprivileged_io_uring", return_value=(0, 0)
+        ):
+            findings = [
+                f for f in audit_kernel().findings if "mediation AppArmor" in f.detail
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+
+    def test_representative_apparmor_mediation_passes(self):
+        with self._sysctl(0) as global_policy, self._sysctl(1) as apparmor_policy:
+            self.assertIsNone(scan_unmediated_unprivileged_io_uring(
+                global_policy.name, apparmor_policy.name
+            ))
+
+    def test_global_restriction_makes_apparmor_fallback_unnecessary(self):
+        with self._sysctl(1) as global_policy, self._sysctl(0) as apparmor_policy:
+            self.assertIsNone(scan_unmediated_unprivileged_io_uring(
+                global_policy.name, apparmor_policy.name
+            ))
+
+    def test_missing_apparmor_interface_is_not_called_disabled(self):
+        with self._sysctl(0) as global_policy:
+            self.assertIsNone(scan_unmediated_unprivileged_io_uring(
+                global_policy.name, "/path/that/does/not/exist"
+            ))
 
 
 class UserfaultfdRestrictionTests(unittest.TestCase):
