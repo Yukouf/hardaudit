@@ -206,6 +206,32 @@ def _capture(command):
         return 127, ""
 
 
+def scan_unprotected_reverse_paths(root="/proc/sys/net/ipv4/conf"):
+    """Liste les interfaces sans validation effective de l'adresse source IPv4."""
+    try:
+        with open(os.path.join(root, "all", "rp_filter"), encoding="utf-8") as f:
+            all_value = int(f.read().strip())
+        interfaces = os.listdir(root)
+    except (OSError, ValueError):
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        # Le loopback ne reçoit pas de trafic depuis le réseau. "all" et
+        # "default" sont des modèles de configuration, pas des interfaces.
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            with open(os.path.join(root, interface, "rp_filter"), encoding="utf-8") as f:
+                interface_value = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        # Le kernel applique le maximum entre conf/all et conf/interface.
+        if max(all_value, interface_value) == 0:
+            findings.append((interface, all_value, interface_value))
+    return findings
+
+
 def audit_network(allowed_ports=None):
     m = Module("Reseau & Ports", 12, "CIS 3.x")
     allowed_ports = {str(port) for port in (allowed_ports or set())}
@@ -231,6 +257,16 @@ def audit_network(allowed_ports=None):
                 f"Ports: {', '.join(expected)}. Ils restent affiches pour la tracabilite mais ne reduisent pas le score.",
                 "INFO",
                 verify="sudo ss -ltnp",
+            )
+
+        reverse_path_findings = scan_unprotected_reverse_paths()
+        if reverse_path_findings:
+            interfaces = ", ".join(item[0] for item in reverse_path_findings)
+            m.add(
+                "Validation anti-spoofing IPv4 desactivee",
+                f"rp_filter vaut effectivement 0 sur : {interfaces}. Le mode 1 est strict ; utiliser 2 si le routage asymetrique exige un mode plus compatible.",
+                "LOW",
+                verify="sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter; grep -H . /proc/sys/net/ipv4/conf/*/rp_filter",
             )
     except Exception as e:
         m.add("Erreur audit reseau", str(e), "MEDIUM")

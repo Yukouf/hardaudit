@@ -23,6 +23,7 @@ from hardaudit import (
     scan_executable_memfd_default,
     scan_deleted_executables,
     scan_fs_link_protections,
+    scan_unprotected_reverse_paths,
     scan_unsafe_suid_dumps,
     scan_unrestricted_io_uring,
     scan_unmediated_unprivileged_io_uring,
@@ -100,6 +101,52 @@ class FilesystemProtectionTests(unittest.TestCase):
                 "protected_regular": 2,
             })
             self.assertEqual(scan_fs_link_protections(root), [])
+
+
+class ReversePathFilteringTests(unittest.TestCase):
+    def _write_rp_filter(self, root, interface, value):
+        interface_dir = os.path.join(root, interface)
+        os.makedirs(interface_dir)
+        with open(os.path.join(interface_dir, "rp_filter"), "w", encoding="utf-8") as f:
+            f.write(f"{value}\n")
+
+    def test_reports_only_interfaces_with_no_effective_source_validation(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_rp_filter(root, "all", 0)
+            self._write_rp_filter(root, "default", 0)
+            self._write_rp_filter(root, "eth0", 0)
+            self._write_rp_filter(root, "eth1", 2)
+            self._write_rp_filter(root, "lo", 0)
+            self.assertEqual(
+                scan_unprotected_reverse_paths(root),
+                [("eth0", 0, 0)],
+            )
+
+    def test_all_loose_mode_protects_interfaces_even_when_local_value_is_zero(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_rp_filter(root, "all", 2)
+            self._write_rp_filter(root, "default", 2)
+            self._write_rp_filter(root, "eth0", 0)
+            self._write_rp_filter(root, "lo", 0)
+            self.assertEqual(scan_unprotected_reverse_paths(root), [])
+
+    @patch("hardaudit._capture", return_value=(0, ""))
+    @patch("hardaudit.scan_unprotected_reverse_paths", return_value=[("eth0", 0, 0)])
+    def test_network_audit_reports_disabled_source_validation(self, _scan, _capture):
+        findings = [f for f in audit_network().findings if "anti-spoofing" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("routage asymetrique", findings[0].detail)
+
+    def test_representative_host_values_are_exercised_safely(self):
+        root = "/proc/sys/net/ipv4/conf"
+        if not os.path.exists(os.path.join(root, "all", "rp_filter")):
+            self.skipTest("rp_filter is not exposed by this kernel")
+        findings = scan_unprotected_reverse_paths(root)
+        self.assertIsInstance(findings, list)
+        for interface, all_value, interface_value in findings:
+            self.assertNotEqual(interface, "lo")
+            self.assertEqual(max(all_value, interface_value), 0)
 
 
 class SuidCoreDumpTests(unittest.TestCase):
