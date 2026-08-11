@@ -469,6 +469,28 @@ def scan_proc_hidepid(mountinfo_path="/proc/self/mountinfo"):
     return None
 
 
+def scan_mount_options(target, mountinfo_path="/proc/self/mountinfo"):
+    """Retourne les options effectives du montage exact vise, si present."""
+    try:
+        with open(mountinfo_path, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return None
+
+    # mountinfo encode notamment les espaces sous la forme \040.
+    escaped_target = target.replace("\\", "\\134").replace(" ", "\\040")
+    for line in lines:
+        fields = line.split()
+        try:
+            separator = fields.index("-")
+        except ValueError:
+            continue
+        if len(fields) <= separator + 3 or fields[4] != escaped_target:
+            continue
+        return set(fields[5].split(",")) | set(fields[separator + 3].split(","))
+    return None
+
+
 def scan_unsafe_suid_dumps(
     suid_dumpable_path="/proc/sys/fs/suid_dumpable",
     core_pattern_path="/proc/sys/kernel/core_pattern",
@@ -983,6 +1005,21 @@ def audit_filesystem():
         if not noexec:
             m.add("/tmp executable", "Monter /tmp avec noexec,nosuid si compatible avec les applications.", "MEDIUM",
                   verify="findmnt /tmp -o TARGET,OPTIONS")
+
+        # /dev/shm est un tmpfs 1777 destine a la memoire partagee POSIX. Sans
+        # noexec, tout compte local peut aussi y deposer et lancer un binaire
+        # directement depuis la RAM. nodev et nosuid completent ce cloisonnement.
+        shm_options = scan_mount_options("/dev/shm")
+        if shm_options is not None:
+            missing = {"nodev", "nosuid", "noexec"} - shm_options
+            if missing:
+                missing_text = ",".join(sorted(missing))
+                m.add(
+                    "/dev/shm insuffisamment cloisonne",
+                    f"Options absentes : {missing_text}. Ajouter nodev,nosuid,noexec si les applications le permettent ; noexec bloque l'execution directe mais pas la lecture par un interpreteur.",
+                    "LOW",
+                    verify="findmnt -T /dev/shm -o TARGET,FSTYPE,OPTIONS",
+                )
 
         # Sans hidepid, un compte local peut lire les metadonnees de processus
         # d'autres utilisateurs. C'est surtout pertinent sur les hotes partages.

@@ -24,6 +24,7 @@ from hardaudit import (
     scan_executable_memfd_default,
     scan_deleted_executables,
     scan_fs_link_protections,
+    scan_mount_options,
     scan_proc_hidepid,
     scan_unsafe_ipv4_redirect_senders,
     scan_unsafe_ipv4_redirects,
@@ -135,6 +136,47 @@ class ProcVisibilityTests(unittest.TestCase):
     def test_live_proc_mount_is_parsed_without_modifying_it(self):
         mode = scan_proc_hidepid()
         self.assertIn(mode, (0, 1, 2, 4, None))
+
+
+class SharedMemoryMountTests(unittest.TestCase):
+    def _mountinfo(self, line):
+        mountinfo = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        mountinfo.write(line + "\n")
+        mountinfo.flush()
+        return mountinfo
+
+    def test_missing_noexec_is_reported(self):
+        line = "42 29 0:28 / /dev/shm rw,nosuid,nodev - tmpfs tmpfs rw,inode64"
+        with self._mountinfo(line) as mountinfo:
+            self.assertEqual(
+                scan_mount_options("/dev/shm", mountinfo.name),
+                {"rw", "nosuid", "nodev", "inode64"},
+            )
+
+        with patch(
+            "hardaudit.scan_mount_options",
+            return_value={"rw", "nosuid", "nodev"},
+        ):
+            findings = [f for f in audit_filesystem().findings if "/dev/shm" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("noexec", findings[0].detail)
+
+    def test_representative_hardened_mount_passes(self):
+        line = "42 29 0:28 / /dev/shm rw,nosuid,nodev,noexec - tmpfs tmpfs rw,inode64"
+        with self._mountinfo(line) as mountinfo:
+            options = scan_mount_options("/dev/shm", mountinfo.name)
+        self.assertTrue({"nodev", "nosuid", "noexec"}.issubset(options))
+
+        with patch("hardaudit.scan_mount_options", return_value=options):
+            findings = [f for f in audit_filesystem().findings if "/dev/shm" in f.title]
+        self.assertEqual(findings, [])
+
+    def test_live_mount_is_exercised_read_only(self):
+        options = scan_mount_options("/dev/shm")
+        if options is None:
+            self.skipTest("/dev/shm is not a distinct mount")
+        self.assertIn("rw", options)
 
 
 class ReversePathFilteringTests(unittest.TestCase):
