@@ -359,6 +359,34 @@ def scan_fs_link_protections(sysctl_root="/proc/sys/fs"):
     return findings
 
 
+def scan_proc_hidepid(mountinfo_path="/proc/self/mountinfo"):
+    """Retourne le mode hidepid du procfs monte sur /proc (0 par defaut)."""
+    aliases = {"noaccess": 1, "invisible": 2, "ptraceable": 4}
+    try:
+        with open(mountinfo_path, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return None
+
+    for line in lines:
+        fields = line.split()
+        try:
+            separator = fields.index("-")
+        except ValueError:
+            continue
+        if (len(fields) <= separator + 3 or fields[4] != "/proc"
+                or fields[separator + 1] != "proc"):
+            continue
+        options = fields[5].split(",") + fields[separator + 3].split(",")
+        raw_mode = next((option.split("=", 1)[1] for option in options
+                         if option.startswith("hidepid=")), "0")
+        try:
+            return int(raw_mode)
+        except ValueError:
+            return aliases.get(raw_mode)
+    return None
+
+
 def scan_unsafe_suid_dumps(
     suid_dumpable_path="/proc/sys/fs/suid_dumpable",
     core_pattern_path="/proc/sys/kernel/core_pattern",
@@ -875,6 +903,16 @@ def audit_filesystem():
         if not noexec:
             m.add("/tmp executable", "Monter /tmp avec noexec,nosuid si compatible avec les applications.", "MEDIUM",
                   verify="findmnt /tmp -o TARGET,OPTIONS")
+
+        # Sans hidepid, un compte local peut lire les metadonnees de processus
+        # d'autres utilisateurs. C'est surtout pertinent sur les hotes partages.
+        if scan_proc_hidepid() == 0:
+            m.add(
+                "Metadonnees des processus visibles entre utilisateurs",
+                "/proc utilise le mode hidepid=0 par defaut. Sur un hote multi-utilisateur, hidepid=1 ou 2 limite l'inventaire des commandes et services des autres comptes ; verifier la compatibilite des outils de supervision.",
+                "LOW",
+                verify="findmnt /proc -o TARGET,FSTYPE,OPTIONS; runuser -u nobody -- test -r /proc/1/status",
+            )
 
         # World-writable files (echantillon rapide)
         r = subprocess.run(["find", "/etc", "-type", "f", "-perm", "-o+w", "-maxdepth", "2"],

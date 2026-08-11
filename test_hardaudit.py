@@ -10,6 +10,7 @@ from hardaudit import (
     Finding,
     audit_kernel,
     audit_network,
+    audit_filesystem,
     audit_users,
     classify_deleted_executable,
     classify_update_severity,
@@ -23,6 +24,7 @@ from hardaudit import (
     scan_executable_memfd_default,
     scan_deleted_executables,
     scan_fs_link_protections,
+    scan_proc_hidepid,
     scan_unprotected_reverse_paths,
     scan_unsafe_suid_dumps,
     scan_unrestricted_io_uring,
@@ -101,6 +103,36 @@ class FilesystemProtectionTests(unittest.TestCase):
                 "protected_regular": 2,
             })
             self.assertEqual(scan_fs_link_protections(root), [])
+
+
+class ProcVisibilityTests(unittest.TestCase):
+    def _mountinfo(self, line):
+        mountinfo = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        mountinfo.write(line + "\n")
+        mountinfo.flush()
+        return mountinfo
+
+    def test_default_proc_mount_exposes_other_users_process_metadata(self):
+        line = "25 29 0:23 / /proc rw,nosuid,nodev,noexec - proc proc rw"
+        with self._mountinfo(line) as mountinfo:
+            self.assertEqual(scan_proc_hidepid(mountinfo.name), 0)
+
+        with patch("hardaudit.scan_proc_hidepid", return_value=0):
+            findings = [f for f in audit_filesystem().findings if "processus" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("multi-utilisateur", findings[0].detail)
+
+    def test_representative_hidepid_modes_protect_process_metadata(self):
+        for value, expected in (("1", 1), ("invisible", 2), ("ptraceable", 4)):
+            with self.subTest(value=value):
+                line = f"25 29 0:23 / /proc rw,nosuid,nodev,noexec - proc proc rw,hidepid={value}"
+                with self._mountinfo(line) as mountinfo:
+                    self.assertEqual(scan_proc_hidepid(mountinfo.name), expected)
+
+    def test_live_proc_mount_is_parsed_without_modifying_it(self):
+        mode = scan_proc_hidepid()
+        self.assertIn(mode, (0, 1, 2, 4, None))
 
 
 class ReversePathFilteringTests(unittest.TestCase):

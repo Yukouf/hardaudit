@@ -113,7 +113,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
 | Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié et durcissement du JIT BPF, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrous kexec/modules/Lockdown, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
 | Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires supprimés encore actifs |
-| Filesystem | 10 | CIS 1.1 / ANSSI R28 | /tmp executable, world-writable, sticky bit, shadow |
+| Filesystem | 10 | CIS 1.1 / ANSSI R28 | /tmp executable, world-writable, sticky bit, shadow, visibilité inter-utilisateurs de `/proc` |
 | Logs | 8 | CIS 4.x | auditd, rsyslog, logrotate |
 
 ---
@@ -167,6 +167,10 @@ sudo ps -fp PID
 
 # Protections contre les fichiers et liens piégés dans les dossiers partagés
 sysctl fs.protected_hardlinks fs.protected_symlinks fs.protected_fifos fs.protected_regular
+
+# Visibilité des processus entre comptes locaux (hidepid=0 par défaut, 1/2/4 restreints)
+findmnt /proc -o TARGET,FSTYPE,OPTIONS
+runuser -u nobody -- test -r /proc/1/status
 
 # Core dumps privilégiés : 0 = désactivés ; 1 = dangereux ; 2 = sûr seulement avec pipe ou chemin absolu
 sysctl fs.suid_dumpable kernel.core_pattern
@@ -241,6 +245,8 @@ cat /proc/cmdline
 > **Faux positif rp_filter :** le mode strict `1` peut casser le routage asymétrique ou certains montages multi-interface. Le mode souple `2` vérifie que la source est joignable par une interface et constitue alors le compromis documenté par le kernel ; HardAudit accepte les deux et tient compte du maximum entre `conf/all` et chaque interface.
 
 > **Faux positif memfd :** des runtimes, navigateurs ou moteurs JIT peuvent légitimement exécuter du code depuis un memfd. Le mode `1` conserve cette possibilité avec `MFD_EXEC` explicite ; le mode `2` la bloque et doit être testé avec les applications avant déploiement.
+
+> **Faux positif hidepid :** ce durcissement apporte peu sur une machine réellement mono-utilisateur et peut gêner certains agents de supervision. Sur un serveur partagé, `hidepid=1` protège déjà les fichiers sensibles des processus ; `hidepid=2` masque aussi leurs répertoires. Tester le monitoring avant de modifier le montage de `/proc`.
 
 > **Faux positif TIOCSTI :** certains logiciels historiques de terminal peuvent encore dépendre de cette injection. La valeur `0` convient à la plupart des systèmes modernes, mais les processus ayant `CAP_SYS_ADMIN` restent autorisés ; valider les outils d'accessibilité et de terminal avant déploiement global.
 
