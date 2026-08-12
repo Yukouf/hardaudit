@@ -38,6 +38,7 @@ from hardaudit import (
     scan_unprotected_reverse_paths,
     scan_unsafe_suid_dumps,
     scan_unbounded_core_pipe,
+    scan_unlimited_user_pipe_memory,
     scan_unrestricted_io_uring,
     scan_unmediated_unprivileged_io_uring,
     scan_unprivileged_bpf,
@@ -116,6 +117,35 @@ class FilesystemProtectionTests(unittest.TestCase):
                 "protected_regular": 2,
             })
             self.assertEqual(scan_fs_link_protections(root), [])
+
+
+class UserPipeMemoryTests(unittest.TestCase):
+    def _limit(self, value):
+        limit = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        limit.write(f"{value}\n")
+        limit.flush()
+        return limit
+
+    def test_both_disabled_pipe_quotas_are_reported(self):
+        with self._limit(0) as soft, self._limit(0) as hard:
+            self.assertEqual(
+                scan_unlimited_user_pipe_memory(soft.name, hard.name),
+                (0, 0),
+            )
+
+        with patch("hardaudit.scan_unlimited_user_pipe_memory", return_value=(0, 0)):
+            findings = [f for f in audit_kernel().findings if "memoire des pipes" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("aucune limite", findings[0].detail)
+
+    def test_positive_soft_quota_is_accepted_when_hard_quota_is_disabled(self):
+        with self._limit(16384) as soft, self._limit(0) as hard:
+            self.assertIsNone(scan_unlimited_user_pipe_memory(soft.name, hard.name))
+
+    def test_live_pipe_quotas_are_read_without_modification(self):
+        result = scan_unlimited_user_pipe_memory()
+        self.assertIn(result, (None, (0, 0)))
 
 
 class ProcVisibilityTests(unittest.TestCase):

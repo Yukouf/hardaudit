@@ -621,6 +621,26 @@ def scan_fs_link_protections(sysctl_root="/proc/sys/fs"):
     return findings
 
 
+def scan_unlimited_user_pipe_memory(
+    soft_path="/proc/sys/fs/pipe-user-pages-soft",
+    hard_path="/proc/sys/fs/pipe-user-pages-hard",
+):
+    """Retourne les quotas quand aucune borne mémoire par utilisateur n'est active."""
+    try:
+        with open(soft_path, encoding="utf-8") as f:
+            soft_limit = int(f.read().strip())
+        with open(hard_path, encoding="utf-8") as f:
+            hard_limit = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    # Le kernel documente 0 comme « aucune limite » pour les deux réglages.
+    # Une borne souple positive limite déjà la taille des nouveaux pipes après
+    # dépassement, même si la borne dure reste à sa valeur par défaut 0.
+    if soft_limit == 0 and hard_limit == 0:
+        return soft_limit, hard_limit
+    return None
+
+
 def scan_proc_hidepid(mountinfo_path="/proc/self/mountinfo"):
     """Retourne le mode hidepid du procfs monte sur /proc (0 par defaut)."""
     aliases = {"noaccess": 1, "invisible": 2, "ptraceable": 4}
@@ -1025,6 +1045,17 @@ def audit_kernel():
             "kernel.panic_on_oops = 0 et kernel.oops_limit = 0. Le kernel tente de continuer et ne panique jamais selon le nombre d'oops ; conserver une borne positive pour limiter les exploitations qui repetent une faute kernel.",
             "LOW",
             verify="sysctl kernel.panic_on_oops kernel.oops_limit",
+        )
+
+    # Sans aucun quota par UID, un compte ordinaire peut accumuler la mémoire
+    # noyau des pipes. La borne souple suffit déjà à réduire les nouveaux pipes ;
+    # ne pas exiger une borne dure lorsque la valeur par défaut 0 est compensée.
+    if scan_unlimited_user_pipe_memory() == (0, 0):
+        m.add(
+            "Aucune limite de memoire des pipes par utilisateur",
+            "fs.pipe-user-pages-soft = 0 et fs.pipe-user-pages-hard = 0 : aucune limite par utilisateur n'est appliquee. Fixer au moins une borne souple positive adaptee a la charge pour reduire un epuisement de memoire noyau par un compte local.",
+            "LOW",
+            verify="sysctl fs.pipe-user-pages-soft fs.pipe-user-pages-hard; getconf PAGE_SIZE",
         )
 
     # Ces sysctl bloquent plusieurs pieges inter-utilisateurs dans les
