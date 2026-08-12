@@ -45,6 +45,7 @@ from hardaudit import (
     scan_legacy_tiocsti_enabled,
     scan_unprivileged_tty_ldisc_autoload,
     scan_unprivileged_userfaultfd,
+    scan_delegated_userfaultfd,
     scan_unrestricted_unprivileged_userns,
     scan_unconfined_userns_exception,
     scan_unlimited_kernel_oopses,
@@ -751,6 +752,31 @@ class UserfaultfdRestrictionTests(unittest.TestCase):
             sysctl.write("0\n")
             sysctl.flush()
             self.assertIsNone(scan_unprivileged_userfaultfd(sysctl.name))
+
+    def test_device_permissions_bypass_restrictive_sysctl(self):
+        with tempfile.NamedTemporaryFile() as device:
+            os.chmod(device.name, 0o666)
+            self.assertEqual(scan_delegated_userfaultfd(device.name)[0], 0o666)
+
+        with patch("hardaudit.scan_unprivileged_userfaultfd", return_value=None), \
+                patch("hardaudit.scan_delegated_userfaultfd", return_value=(0o660, 0, 1000)):
+            findings = [f for f in audit_kernel().findings if "delegue" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertIn("meme si vm.unprivileged_userfaultfd = 0", findings[0].detail)
+
+    def test_representative_root_only_device_passes(self):
+        with tempfile.NamedTemporaryFile() as device:
+            os.chmod(device.name, 0o600)
+            self.assertIsNone(scan_delegated_userfaultfd(device.name))
+
+    def test_live_device_permissions_are_exercised_read_only(self):
+        path = "/dev/userfaultfd"
+        if not os.path.exists(path):
+            self.skipTest("ce kernel n'expose pas /dev/userfaultfd")
+        info = os.stat(path)
+        expected = None if info.st_uid == 0 and not (info.st_mode & 0o066) \
+            else (info.st_mode & 0o777, info.st_uid, info.st_gid)
+        self.assertEqual(scan_delegated_userfaultfd(path), expected)
 
 
 class MemfdExecutionPolicyTests(unittest.TestCase):

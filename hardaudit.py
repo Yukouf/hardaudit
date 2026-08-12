@@ -826,6 +826,22 @@ def scan_unprivileged_userfaultfd(path="/proc/sys/vm/unprivileged_userfaultfd"):
     return value if value == 1 else None
 
 
+def scan_delegated_userfaultfd(path="/dev/userfaultfd"):
+    """Retourne les droits qui deleguent userfaultfd a un compte non-root.
+
+    Le peripherique contourne volontairement vm.unprivileged_userfaultfd : ses
+    permissions constituent donc une politique d'acces independante.
+    """
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    mode = info.st_mode & 0o777
+    if info.st_uid != 0 or mode & 0o066:
+        return mode, info.st_uid, info.st_gid
+    return None
+
+
 def scan_executable_memfd_default(path="/proc/sys/vm/memfd_noexec"):
     """Retourne 0 lorsque memfd_create() produit un fichier executable par defaut."""
     try:
@@ -1127,6 +1143,19 @@ def audit_kernel():
             f"{path} = 1. Un compte sans CAP_SYS_PTRACE peut aussi intercepter des fautes venant du kernel ; utiliser 0 sauf besoin documente. Verifier aussi les droits de /dev/userfaultfd s'il existe.",
             "LOW",
             verify=f"cat {path}; [ ! -e /dev/userfaultfd ] || stat -c '%A %U %G %n' /dev/userfaultfd",
+        )
+
+    # /dev/userfaultfd est une seconde porte, independante du sysctl : le
+    # kernel autorise toujours ses utilisateurs a intercepter les fautes venant
+    # du kernel. Signaler toute delegation, même si le sysctl protecteur vaut 0.
+    delegated_userfaultfd = scan_delegated_userfaultfd()
+    if delegated_userfaultfd is not None:
+        mode, uid, gid = delegated_userfaultfd
+        m.add(
+            "Acces userfaultfd delegue hors de root",
+            f"/dev/userfaultfd a les droits {mode:03o} et appartient a UID {uid}, GID {gid}. Les comptes autorises par ce peripherique peuvent intercepter les fautes venant du kernel meme si vm.unprivileged_userfaultfd = 0 ; conserver uniquement une delegation explicitement requise.",
+            "LOW",
+            verify="sysctl vm.unprivileged_userfaultfd; stat -c '%a %A %U %G %n' /dev/userfaultfd; command -v getfacl >/dev/null && getfacl -cp /dev/userfaultfd",
         )
 
     # Depuis Linux 6.3, ce réglage permet de ne plus rendre implicitement
