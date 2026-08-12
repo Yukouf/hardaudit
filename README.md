@@ -71,6 +71,12 @@ Puis lance l'audit depuis n'importe quel dossier :
 sudo hardaudit
 ```
 
+## 🏗️ Architecture
+
+![Architecture réelle de HardAudit](assets/architecture.svg)
+
+HardAudit lit la configuration et l’état du système sans les modifier. Ses neuf modules produisent des constats pondérés, regroupés en un score sur 100, un grade et des sorties console, TXT ou JSON. Un score inférieur à 80 provoque un code de sortie non nul pour l’automatisation.
+
 Exporter un rapport ou obtenir du JSON :
 
 ```bash
@@ -204,6 +210,7 @@ $ sudo python3 hardaudit.py
 hardaudit/
 ├── hardaudit.py      # Le script — tout tient dans un seul fichier
 ├── test_hardaudit.py # Tests sans dépendance externe
+├── assets/architecture.svg # Schéma d’architecture vectoriel
 ├── LICENSE           # MIT
 └── README.md         # Ce fichier
 ```
