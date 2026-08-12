@@ -319,6 +319,34 @@ def scan_unsafe_ipv4_redirect_senders(root="/proc/sys/net/ipv4/conf"):
     return findings
 
 
+def scan_unsafe_ipv6_redirects(root="/proc/sys/net/ipv6/conf"):
+    """Liste les interfaces hote qui acceptent les redirects ICMPv6."""
+    try:
+        interfaces = os.listdir(root)
+    except OSError:
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        # "all" et "default" sont des politiques, pas des interfaces. Le
+        # loopback ne reçoit pas de redirects depuis un voisin réseau.
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            with open(os.path.join(root, interface, "accept_redirects"), encoding="utf-8") as f:
+                accept_redirects = int(f.read().strip())
+            with open(os.path.join(root, interface, "forwarding"), encoding="utf-8") as f:
+                forwarding = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+
+        # La valeur fonctionnelle documentée est active sur les interfaces
+        # hôte et inactive sur les interfaces routeur.
+        if accept_redirects == 1 and forwarding == 0:
+            findings.append((interface, accept_redirects, forwarding))
+    return findings
+
+
 def audit_network(allowed_ports=None):
     m = Module("Reseau & Ports", 12, "CIS 3.x")
     allowed_ports = {str(port) for port in (allowed_ports or set())}
@@ -384,6 +412,16 @@ def audit_network(allowed_ports=None):
                 f"Interfaces routeur concernees : {interfaces}. Une valeur locale a 1 suffit meme si conf/all vaut 0 ; ces messages peuvent faire choisir une autre passerelle aux machines voisines. Desactiver sauf besoin de routage explicite.",
                 "LOW",
                 verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*/}{send_redirects,forwarding} 2>/dev/null",
+            )
+
+        ipv6_redirects = scan_unsafe_ipv6_redirects()
+        if ipv6_redirects:
+            interfaces = ", ".join(item[0] for item in ipv6_redirects)
+            m.add(
+                "Acceptation effective des redirects ICMPv6",
+                f"Interfaces hote concernees : {interfaces}. Un voisin IPv6 peut proposer une autre route ; desactiver accept_redirects sauf besoin explicite et verifier aussi les interfaces virtuelles.",
+                "MEDIUM",
+                verify="grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_redirects,forwarding} 2>/dev/null",
             )
     except Exception as e:
         m.add("Erreur audit reseau", str(e), "MEDIUM")

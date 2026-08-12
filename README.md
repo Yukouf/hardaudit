@@ -108,7 +108,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 |---|---|---|---|
 | Utilisateurs | 12 | CIS 5.x | Root accessible, UID 0 non-root, sudo sans mdp, umask |
 | SSH | 12 | CIS 5.2 / ANSSI R5 | PermitRootLogin, PasswordAuth, X11Forwarding, port |
-| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), routage inhabituel de `127/8`, acceptation et émission effectives des redirects ICMP IPv4 par interface |
+| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), routage inhabituel de `127/8`, acceptation et émission effectives des redirects ICMP IPv4, acceptation des redirects ICMPv6 par interface |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
 | Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés et collecteurs pipe sans borne, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrous kexec/modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
@@ -170,6 +170,9 @@ grep -H . /proc/sys/net/ipv4/conf/{all,default,*/}{accept_redirects,forwarding} 
 
 # Émission de redirects : sur une interface routeur, `all=1` OU la valeur locale suffit
 grep -H . /proc/sys/net/ipv4/conf/{all,default,*/}{send_redirects,forwarding} 2>/dev/null
+
+# Redirects ICMPv6 : actifs sur une interface hôte si accept_redirects=1 et forwarding=0
+grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_redirects,forwarding} 2>/dev/null
 
 # Processus utilisant encore un ancien binaire après mise à jour
 sudo ls -l /proc/PID/exe
@@ -276,6 +279,8 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 > **Faux positif redirects ICMP :** un routeur administré peut utiliser volontairement les redirects. HardAudit calcule la règle documentée par le kernel par interface : en mode hôte, `all=1` **ou** `interface=1` suffit ; avec le forwarding actif, les deux doivent valoir `1`. Le finding prouve l'acceptation locale, pas une attaque en cours.
 
 > **Faux positif émission de redirects :** HardAudit ne signale que les interfaces qui routent réellement et dont `send_redirects` est effectif (`all=1` **ou** `interface=1`). Un routeur administré peut en avoir besoin ; le finding `LOW` indique une capacité active, pas un détournement en cours.
+
+> **Faux positif redirects ICMPv6 :** l'acceptation est le comportement hôte par défaut de Linux et peut être nécessaire sur un réseau administré. HardAudit signale les interfaces concernées, y compris virtuelles, car une valeur globale à `0` ne neutralise pas leurs valeurs locales. Le finding prouve une capacité active, pas une attaque en cours.
 
 > **Faux positif memfd :** des runtimes, navigateurs ou moteurs JIT peuvent légitimement exécuter du code depuis un memfd. Le mode `1` conserve cette possibilité avec `MFD_EXEC` explicite ; le mode `2` la bloque et doit être testé avec les applications avant déploiement.
 

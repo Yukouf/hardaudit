@@ -30,6 +30,7 @@ from hardaudit import (
     scan_routed_loopback_interfaces,
     scan_unsafe_ipv4_redirect_senders,
     scan_unsafe_ipv4_redirects,
+    scan_unsafe_ipv6_redirects,
     scan_unprotected_reverse_paths,
     scan_unsafe_suid_dumps,
     scan_unbounded_core_pipe,
@@ -291,8 +292,9 @@ class IcmpRedirectTests(unittest.TestCase):
         with patch(
             "hardaudit.scan_unsafe_ipv4_redirects",
             return_value=[("eth0", 0, 1, 0)],
-        ), patch("hardaudit.scan_unsafe_ipv4_redirect_senders", return_value=[]):
-            findings = [f for f in audit_network().findings if "redirects ICMP" in f.title]
+        ), patch("hardaudit.scan_unsafe_ipv4_redirect_senders", return_value=[]), \
+                patch("hardaudit.scan_unsafe_ipv6_redirects", return_value=[]):
+            findings = [f for f in audit_network().findings if "ICMP IPv4" in f.title]
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0].severity, "MEDIUM")
         self.assertIn("eth0", findings[0].detail)
@@ -319,6 +321,48 @@ class IcmpRedirectTests(unittest.TestCase):
                 else all_value == 1 or interface_value == 1
             )
             self.assertTrue(expected)
+
+
+class IcmpV6RedirectTests(unittest.TestCase):
+    def _write_interface(self, root, interface, accept_redirects, forwarding):
+        interface_dir = os.path.join(root, interface)
+        os.makedirs(interface_dir)
+        for name, value in (
+            ("accept_redirects", accept_redirects),
+            ("forwarding", forwarding),
+        ):
+            with open(os.path.join(interface_dir, name), "w", encoding="utf-8") as f:
+                f.write(f"{value}\n")
+
+    def test_only_host_interfaces_accepting_redirects_are_reported(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_interface(root, "all", 0, 0)
+            self._write_interface(root, "default", 0, 0)
+            self._write_interface(root, "eth0", 1, 0)
+            self._write_interface(root, "eth1", 1, 1)
+            self._write_interface(root, "eth2", 0, 0)
+            self._write_interface(root, "lo", 1, 0)
+            self.assertEqual(scan_unsafe_ipv6_redirects(root), [("eth0", 1, 0)])
+
+        with patch("hardaudit.scan_unsafe_ipv6_redirects", return_value=[("eth0", 1, 0)]), \
+                patch("hardaudit.scan_unsafe_ipv4_redirects", return_value=[]), \
+                patch("hardaudit.scan_unsafe_ipv4_redirect_senders", return_value=[]), \
+                patch("hardaudit.scan_unprotected_reverse_paths", return_value=[]), \
+                patch("hardaudit.scan_routed_loopback_interfaces", return_value=[]):
+            findings = [f for f in audit_network().findings if "ICMPv6" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "MEDIUM")
+        self.assertIn("eth0", findings[0].detail)
+
+    def test_live_ipv6_values_are_exercised_read_only(self):
+        root = "/proc/sys/net/ipv6/conf"
+        if not os.path.exists(root):
+            self.skipTest("IPv6 controls are not exposed by this kernel")
+        findings = scan_unsafe_ipv6_redirects(root)
+        self.assertIsInstance(findings, list)
+        for interface, accept_redirects, forwarding in findings:
+            self.assertNotIn(interface, ("all", "default", "lo"))
+            self.assertEqual((accept_redirects, forwarding), (1, 0))
 
 
 class IcmpRedirectSenderTests(unittest.TestCase):
@@ -909,9 +953,10 @@ class FalsePositiveRegressionTests(unittest.TestCase):
 
     @patch("hardaudit.scan_unsafe_ipv4_redirect_senders", return_value=[])
     @patch("hardaudit.scan_unsafe_ipv4_redirects", return_value=[])
+    @patch("hardaudit.scan_unsafe_ipv6_redirects", return_value=[])
     @patch("hardaudit.scan_unprotected_reverse_paths", return_value=[])
     @patch("hardaudit._capture")
-    def test_allowed_port_stays_visible_without_penalty(self, capture, _rp, _accept, _send):
+    def test_allowed_port_stays_visible_without_penalty(self, capture, _rp, _ipv6, _accept, _send):
         capture.return_value = (0, "LISTEN 0 128 0.0.0.0:3306 0.0.0.0:*\nLISTEN 0 128 *:10050 *:*")
         module = audit_network(allowed_ports={"3306"})
         self.assertEqual(module.score, 9)
