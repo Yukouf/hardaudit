@@ -937,6 +937,28 @@ def kernel_sysctl_is_unsafe(name, value, expected=None):
     return expected is not None and value != expected
 
 
+def scan_unlimited_kernel_oopses(
+    panic_path="/proc/sys/kernel/panic_on_oops",
+    limit_path="/proc/sys/kernel/oops_limit",
+):
+    """Retourne la politique si aucun oops ne peut provoquer de panic.
+
+    Un oops peut laisser le kernel en vie apres avoir saute des nettoyages. Le
+    risque vise ici est le cas explicite et incontestable documente par le
+    kernel : panic_on_oops=0 combine a oops_limit=0 (compteur desactive).
+    """
+    try:
+        with open(panic_path, encoding="utf-8") as f:
+            panic_on_oops = int(f.read().strip())
+        with open(limit_path, encoding="utf-8") as f:
+            oops_limit = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    if panic_on_oops == 0 and oops_limit == 0:
+        return panic_on_oops, oops_limit
+    return None
+
+
 def audit_kernel():
     m = Module("Kernel & Protections", 14, "CIS 1.6 / ANSSI R14")
     checks = {
@@ -991,6 +1013,18 @@ def audit_kernel():
             f"kernel.core_pattern = {pattern!r} et kernel.core_pipe_limit = {limit}. Les core dumps pipes ignorent RLIMIT_CORE et peuvent lancer un nombre illimite de collecteurs ; fixer une borne positive adaptee a la charge.",
             "LOW",
             verify="sysctl kernel.core_pattern kernel.core_pipe_limit; ulimit -c",
+        )
+
+    # Continuer apres un oops peut laisser des ressources ou verrous dans un
+    # etat incoherent. Le kernel borne par defaut ces repetitions ; oops_limit=0
+    # desactive exactement cette borne. Ne pas imposer panic_on_oops=1, qui peut
+    # transformer un bug recuperable en indisponibilite immediate.
+    if scan_unlimited_kernel_oopses() == (0, 0):
+        m.add(
+            "Oops kernel repetables sans limite",
+            "kernel.panic_on_oops = 0 et kernel.oops_limit = 0. Le kernel tente de continuer et ne panique jamais selon le nombre d'oops ; conserver une borne positive pour limiter les exploitations qui repetent une faute kernel.",
+            "LOW",
+            verify="sysctl kernel.panic_on_oops kernel.oops_limit",
         )
 
     # Ces sysctl bloquent plusieurs pieges inter-utilisateurs dans les

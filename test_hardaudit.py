@@ -46,6 +46,7 @@ from hardaudit import (
     scan_unprivileged_userfaultfd,
     scan_unrestricted_unprivileged_userns,
     scan_unconfined_userns_exception,
+    scan_unlimited_kernel_oopses,
     scan_zero_page_mappable,
     shadow_permissions_unsafe,
 )
@@ -996,6 +997,29 @@ class BinfmtCredentialTests(unittest.TestCase):
 
 
 class KernelSysctlSemanticsTests(unittest.TestCase):
+    def test_unlimited_recoverable_oopses_are_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as panic, \
+                tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as limit:
+            panic.write("0\n"); panic.flush()
+            limit.write("0\n"); limit.flush()
+            self.assertEqual(scan_unlimited_kernel_oopses(panic.name, limit.name), (0, 0))
+
+        with patch("hardaudit.scan_unlimited_kernel_oopses", return_value=(0, 0)):
+            findings = [f for f in audit_kernel().findings if "Oops kernel" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+
+    def test_representative_default_oops_limit_is_accepted(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as panic, \
+                tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as limit:
+            panic.write("0\n"); panic.flush()
+            limit.write("10000\n"); limit.flush()
+            self.assertIsNone(scan_unlimited_kernel_oopses(panic.name, limit.name))
+
+    def test_live_oops_policy_is_exercised_read_only(self):
+        result = scan_unlimited_kernel_oopses()
+        self.assertIn(result, (None, (0, 0)))
+
     def test_kptr_restrict_stronger_mode_is_accepted(self):
         self.assertFalse(kernel_sysctl_is_unsafe("kernel.kptr_restrict", "2"))
 
