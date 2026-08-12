@@ -32,6 +32,7 @@ from hardaudit import (
     scan_unsafe_ipv4_redirects,
     scan_unprotected_reverse_paths,
     scan_unsafe_suid_dumps,
+    scan_unbounded_core_pipe,
     scan_unrestricted_io_uring,
     scan_unmediated_unprivileged_io_uring,
     scan_unprivileged_bpf,
@@ -400,6 +401,39 @@ class SuidCoreDumpTests(unittest.TestCase):
         with patch("hardaudit.scan_unsafe_suid_dumps", return_value=None):
             findings = [f for f in audit_kernel().findings if "Core dumps SUID" in f.title]
         self.assertEqual(findings, [])
+
+
+class CorePipeLimitTests(unittest.TestCase):
+    def _sysctl(self, value):
+        sysctl = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        sysctl.write(f"{value}\n")
+        sysctl.flush()
+        return sysctl
+
+    def test_unlimited_piped_core_helpers_are_reported(self):
+        pattern_value = "|/usr/lib/systemd/systemd-coredump %P %u %g %s %t %c %h"
+        with self._sysctl(pattern_value) as pattern, self._sysctl(0) as limit:
+            self.assertEqual(
+                scan_unbounded_core_pipe(pattern.name, limit.name),
+                (pattern_value, 0),
+            )
+
+        with patch("hardaudit.scan_unbounded_core_pipe", return_value=(pattern_value, 0)):
+            findings = [
+                finding for finding in audit_kernel().findings
+                if "core dump" in finding.title.lower() and "simultanes" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+
+    def test_representative_bounded_apport_pipe_passes(self):
+        pattern_value = "|/usr/share/apport/apport -p%p -s%s -- %E"
+        with self._sysctl(pattern_value) as pattern, self._sysctl(10) as limit:
+            self.assertIsNone(scan_unbounded_core_pipe(pattern.name, limit.name))
+
+    def test_regular_core_file_does_not_need_a_pipe_limit(self):
+        with self._sysctl("core.%p") as pattern, self._sysctl(0) as limit:
+            self.assertIsNone(scan_unbounded_core_pipe(pattern.name, limit.name))
 
 
 class UnprivilegedBpfTests(unittest.TestCase):

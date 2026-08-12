@@ -111,7 +111,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 | Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), routage inhabituel de `127/8`, acceptation et émission effectives des redirects ICMP IPv4 par interface |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
-| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié et durcissement du JIT BPF, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrous kexec/modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
+| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés et collecteurs pipe sans borne, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrous kexec/modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
 | Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires supprimés encore actifs |
 | Filesystem | 10 | CIS 1.1 / ANSSI R28 | `/tmp` exécutable, cloisonnement `nodev,nosuid,noexec` de `/dev/shm`, world-writable, sticky bit, shadow, visibilité inter-utilisateurs de `/proc` |
 | Logs | 8 | CIS 4.x | auditd, rsyslog, logrotate |
@@ -188,6 +188,10 @@ findmnt -T /dev/shm -o TARGET,FSTYPE,OPTIONS
 # Core dumps privilégiés : 0 = désactivés ; 1 = dangereux ; 2 = sûr seulement avec pipe ou chemin absolu
 sysctl fs.suid_dumpable kernel.core_pattern
 
+# Si core_pattern commence par |, 0 autorise des collecteurs simultanés sans limite
+sysctl kernel.core_pattern kernel.core_pipe_limit
+ulimit -c
+
 # Masquage des pointeurs kernel (0 = exposés, 1 = restreints, 2 = masqués même pour root)
 sysctl kernel.kptr_restrict
 
@@ -259,6 +263,8 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 > **Faux positif io_uring :** navigateurs, bases de données et runtimes peuvent dépendre de io_uring. Sur les kernels qui exposent `apparmor_restrict_unprivileged_io_uring`, HardAudit indique si cette médiation de repli est inactive sans ajouter une seconde pénalité ; tester les profils AppArmor avant activation.
 
 > **Faux positif core dumps SUID :** `fs.suid_dumpable=2` n'est pas automatiquement dangereux. Le kernel l'autorise avec un `core_pattern` dirigé vers un handler (`|...`) ou un chemin absolu ; HardAudit vérifie désormais les deux valeurs ensemble. Le mode `1`, lui, reste réservé au débogage car il permet aux utilisateurs ordinaires d'examiner la mémoire de processus privilégiés.
+
+> **Faux positif core_pipe_limit :** une valeur `0` n'est signalée que si `core_pattern` lance réellement un helper avec `|`. Une borne positive limite le nombre de collecteurs concurrents mais peut faire sauter des dumps lors d'une vague de crash ; dimensionner selon la capacité et les besoins de diagnostic.
 
 > **Faux positif rp_filter :** le mode strict `1` peut casser le routage asymétrique ou certains montages multi-interface. Le mode souple `2` vérifie que la source est joignable par une interface et constitue alors le compromis documenté par le kernel ; HardAudit accepte les deux et tient compte du maximum entre `conf/all` et chaque interface.
 

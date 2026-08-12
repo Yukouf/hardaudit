@@ -546,6 +546,23 @@ def scan_unsafe_suid_dumps(
     return None
 
 
+def scan_unbounded_core_pipe(
+    core_pattern_path="/proc/sys/kernel/core_pattern",
+    core_pipe_limit_path="/proc/sys/kernel/core_pipe_limit",
+):
+    """Retourne un handler de core dump pipe sans limite de concurrence."""
+    try:
+        with open(core_pattern_path, encoding="utf-8") as f:
+            pattern = f.read().strip()
+        with open(core_pipe_limit_path, encoding="utf-8") as f:
+            limit = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    if pattern.startswith("|") and limit == 0:
+        return pattern, limit
+    return None
+
+
 def scan_unprivileged_bpf(path="/proc/sys/kernel/unprivileged_bpf_disabled"):
     """Retourne 0 si les appels BPF non privilegies sont autorises."""
     try:
@@ -786,6 +803,19 @@ def audit_kernel():
             f"fs.suid_dumpable = {mode}, kernel.core_pattern = {pattern!r} : {reason}.",
             "MEDIUM",
             verify="sysctl fs.suid_dumpable kernel.core_pattern",
+        )
+
+    # Un core_pattern pipe contourne RLIMIT_CORE. Avec core_pipe_limit=0, le
+    # kernel accepte un nombre illimite de collecteurs simultanes ; une tempete
+    # de crash peut donc amplifier la consommation CPU, memoire et processus.
+    unbounded_core_pipe = scan_unbounded_core_pipe()
+    if unbounded_core_pipe is not None:
+        pattern, limit = unbounded_core_pipe
+        m.add(
+            "Collecteurs de core dump simultanes sans limite",
+            f"kernel.core_pattern = {pattern!r} et kernel.core_pipe_limit = {limit}. Les core dumps pipes ignorent RLIMIT_CORE et peuvent lancer un nombre illimite de collecteurs ; fixer une borne positive adaptee a la charge.",
+            "LOW",
+            verify="sysctl kernel.core_pattern kernel.core_pipe_limit; ulimit -c",
         )
 
     # Ces sysctl bloquent plusieurs pieges inter-utilisateurs dans les
