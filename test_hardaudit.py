@@ -19,6 +19,7 @@ from hardaudit import (
     print_finding,
     get_effective_sshd_settings,
     kernel_sysctl_is_unsafe,
+    scan_active_lsms,
     scan_kernel_lockdown_disabled,
     scan_binfmt_credential_entries,
     scan_kexec_enabled,
@@ -923,6 +924,39 @@ class KernelLockdownTests(unittest.TestCase):
 
     def test_missing_interface_is_not_called_disabled(self):
         self.assertIsNone(scan_kernel_lockdown_disabled("/path/that/does/not/exist"))
+
+
+class ActiveLsmTests(unittest.TestCase):
+    def test_missing_mandatory_access_control_is_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as status:
+            status.write("lockdown,capability,landlock,yama\n")
+            status.flush()
+            self.assertEqual(
+                scan_active_lsms(status.name),
+                ["lockdown", "capability", "landlock", "yama"],
+            )
+
+        with patch(
+            "hardaudit.scan_active_lsms",
+            return_value=["lockdown", "capability", "landlock", "yama"],
+        ):
+            findings = [f for f in audit_kernel().findings if "LSM" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "MEDIUM")
+        self.assertIn("politique MAC", findings[0].detail)
+
+    def test_representative_stacked_apparmor_policy_passes(self):
+        active = ["lockdown", "capability", "landlock", "yama", "apparmor"]
+        with patch("hardaudit.scan_active_lsms", return_value=active):
+            findings = [f for f in audit_kernel().findings if "LSM" in f.title]
+        self.assertEqual(findings, [])
+
+    def test_live_lsm_stack_is_exercised_read_only(self):
+        active = scan_active_lsms()
+        if active is None:
+            self.skipTest("securityfs ne rend pas la liste LSM accessible")
+        self.assertIn("capability", active)
+        self.assertEqual(len(active), len(set(active)))
 
 
 class BinfmtCredentialTests(unittest.TestCase):

@@ -876,6 +876,16 @@ def scan_kernel_lockdown_disabled(path="/sys/kernel/security/lockdown"):
     return selected if selected == "none" else None
 
 
+def scan_active_lsms(path="/sys/kernel/security/lsm"):
+    """Retourne les modules de securite actifs, sans deduire l'etat de leurs politiques."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            names = [name.strip() for name in f.read().split(",") if name.strip()]
+    except OSError:
+        return None
+    return names
+
+
 def scan_binfmt_credential_entries(root="/proc/sys/fs/binfmt_misc"):
     """Liste les formats actifs dont l'interpreteur herite des droits du binaire."""
     try:
@@ -1159,6 +1169,20 @@ def audit_kernel():
             "Kernel Lockdown disponible mais inactif",
             f"{path} selectionne [none]. Les modes integrity/confidentiality bloquent des interfaces permettant de modifier ou d'extraire des donnees du kernel ; a reserver aux hotes dont les modules, kexec et outils de diagnostic ont ete testes.",
             "LOW",
+            verify=f"cat {path}; cat /proc/cmdline",
+        )
+
+    # Plusieurs LSM peuvent coexister : la liste effective est donc plus fiable
+    # qu'un simple paquet installe. capability, Yama, Lockdown et Landlock sont
+    # utiles, mais ne remplacent pas une politique MAC systeme.
+    active_lsms = scan_active_lsms()
+    mac_lsms = {"apparmor", "selinux", "smack", "tomoyo"}
+    if active_lsms is not None and not mac_lsms.intersection(active_lsms):
+        path = "/sys/kernel/security/lsm"
+        m.add(
+            "Aucun LSM de controle d'acces obligatoire actif",
+            f"{path} contient {','.join(active_lsms) or 'une liste vide'}. Les protections presentes ne fournissent pas de politique MAC systeme ; activer et configurer AppArmor, SELinux, Smack ou TOMOYO selon la distribution.",
+            "MEDIUM",
             verify=f"cat {path}; cat /proc/cmdline",
         )
 
