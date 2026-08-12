@@ -20,6 +20,7 @@ from hardaudit import (
     get_effective_sshd_settings,
     kernel_sysctl_is_unsafe,
     scan_kernel_lockdown_disabled,
+    scan_binfmt_credential_entries,
     scan_kexec_enabled,
     scan_executable_memfd_default,
     scan_deleted_executables,
@@ -705,6 +706,42 @@ class KernelLockdownTests(unittest.TestCase):
 
     def test_missing_interface_is_not_called_disabled(self):
         self.assertIsNone(scan_kernel_lockdown_disabled("/path/that/does/not/exist"))
+
+
+class BinfmtCredentialTests(unittest.TestCase):
+    def _entry(self, root, name, flags, state="enabled"):
+        with open(os.path.join(root, name), "w", encoding="utf-8") as entry:
+            entry.write(
+                f"{state}\ninterpreter /usr/libexec/{name}\nflags: {flags}\n"
+                "offset 0\nmagic deadbeef\n"
+            )
+
+    def test_credential_flag_is_reported_but_regular_entries_are_ignored(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._entry(root, "risky", "OCF")
+            self._entry(root, "qemu-safe", "F")
+            self._entry(root, "disabled-c", "C", state="disabled")
+            self.assertEqual(
+                scan_binfmt_credential_entries(root),
+                [("risky", "/usr/libexec/risky", "OCF")],
+            )
+
+        with patch(
+            "hardaudit.scan_binfmt_credential_entries",
+            return_value=[("risky", "/usr/libexec/risky", "OCF")],
+        ):
+            findings = [f for f in audit_kernel().findings if "binfmt_misc" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "HIGH")
+        self.assertIn("setuid root", findings[0].detail)
+
+    def test_representative_local_registrations_are_exercised_read_only(self):
+        findings = scan_binfmt_credential_entries()
+        self.assertIsInstance(findings, list)
+        for name, interpreter, flags in findings:
+            self.assertTrue(name)
+            self.assertTrue(interpreter)
+            self.assertIn("C", flags)
 
 
 class KernelSysctlSemanticsTests(unittest.TestCase):

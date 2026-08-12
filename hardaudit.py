@@ -694,6 +694,40 @@ def scan_kernel_lockdown_disabled(path="/sys/kernel/security/lockdown"):
     return selected if selected == "none" else None
 
 
+def scan_binfmt_credential_entries(root="/proc/sys/fs/binfmt_misc"):
+    """Liste les formats actifs dont l'interpreteur herite des droits du binaire."""
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return []
+
+    risky = []
+    for name in sorted(names):
+        if name in ("register", "status"):
+            continue
+        path = os.path.join(root, name)
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            continue
+        if not lines or lines[0].strip() != "enabled":
+            continue
+        flags = next(
+            (line.split(":", 1)[1].strip() for line in lines
+             if line.startswith("flags:")),
+            "",
+        )
+        interpreter = next(
+            (line.split(None, 1)[1].strip() for line in lines
+             if line.startswith("interpreter ")),
+            "inconnu",
+        )
+        if "C" in flags:
+            risky.append((name, interpreter, flags))
+    return risky
+
+
 def kernel_sysctl_is_unsafe(name, value, expected=None):
     """Compare un sysctl sans signaler comme faible un mode plus strict."""
     minimums = {
@@ -919,6 +953,22 @@ def audit_kernel():
             f"{path} selectionne [none]. Les modes integrity/confidentiality bloquent des interfaces permettant de modifier ou d'extraire des donnees du kernel ; a reserver aux hotes dont les modules, kexec et outils de diagnostic ont ete testes.",
             "LOW",
             verify=f"cat {path}; cat /proc/cmdline",
+        )
+
+    # Le drapeau C de binfmt_misc calcule les credentials d'apres le binaire
+    # lance, pas l'interpreteur. La documentation du kernel avertit donc qu'un
+    # binaire setuid root fait lui aussi tourner l'interpreteur en root.
+    credential_entries = scan_binfmt_credential_entries()
+    if credential_entries:
+        entries = ", ".join(
+            f"{name} -> {interpreter} (flags={flags})"
+            for name, interpreter, flags in credential_entries
+        )
+        m.add(
+            "Interpreteurs binfmt_misc autorises a heriter de privileges",
+            f"Entrees actives avec le drapeau C : {entries}. Un binaire setuid root correspondant execute l'interpreteur avec les droits root ; conserver ce drapeau uniquement pour un interpreteur strictement maitrise.",
+            "HIGH",
+            verify="grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/null",
         )
 
     # Kernel version
