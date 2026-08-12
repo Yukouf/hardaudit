@@ -40,6 +40,7 @@ from hardaudit import (
     scan_unprivileged_tty_ldisc_autoload,
     scan_unprivileged_userfaultfd,
     scan_unrestricted_unprivileged_userns,
+    scan_unconfined_userns_exception,
     scan_zero_page_mappable,
     shadow_permissions_unsafe,
 )
@@ -620,6 +621,35 @@ class AppArmorUserNamespaceRestrictionTests(unittest.TestCase):
             self.assertIsNone(
                 scan_unrestricted_unprivileged_userns(userns.name, restriction.name)
             )
+
+    def test_unconfined_profile_exception_is_reported(self):
+        with self._sysctl(1) as userns, self._sysctl(1) as restriction, self._sysctl(0) as unconfined:
+            self.assertEqual(
+                scan_unconfined_userns_exception(
+                    userns.name, restriction.name, unconfined.name
+                ),
+                (1, 1, 0),
+            )
+
+        with patch("hardaudit.scan_unconfined_userns_exception", return_value=(1, 1, 0)):
+            findings = [f for f in audit_kernel().findings if "unconfined" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("propre permission", findings[0].detail)
+
+    def test_representative_full_apparmor_policy_passes(self):
+        with self._sysctl(1) as userns, self._sysctl(1) as restriction, self._sysctl(1) as unconfined:
+            self.assertIsNone(
+                scan_unconfined_userns_exception(
+                    userns.name, restriction.name, unconfined.name
+                )
+            )
+
+    def test_live_unconfined_policy_is_exercised_read_only(self):
+        path = "/proc/sys/kernel/apparmor_restrict_unprivileged_unconfined"
+        if not os.path.exists(path):
+            self.skipTest("ce kernel n'expose pas la politique AppArmor unconfined")
+        self.assertIn(scan_unconfined_userns_exception(), ((1, 1, 0), None))
 
 
 class NullPageMappingTests(unittest.TestCase):

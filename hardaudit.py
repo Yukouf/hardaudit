@@ -689,6 +689,26 @@ def scan_unrestricted_unprivileged_userns(
     return None
 
 
+def scan_unconfined_userns_exception(
+    userns_path="/proc/sys/kernel/unprivileged_userns_clone",
+    restriction_path="/proc/sys/kernel/apparmor_restrict_unprivileged_userns",
+    unconfined_path="/proc/sys/kernel/apparmor_restrict_unprivileged_unconfined",
+):
+    """Détecte une médiation userns AppArmor sans restriction des profils unconfined."""
+    try:
+        values = []
+        for path in (userns_path, restriction_path, unconfined_path):
+            with open(path, encoding="utf-8") as f:
+                values.append(int(f.read().strip()))
+    except (OSError, ValueError):
+        # Ces interfaces sont spécifiques aux kernels AppArmor compatibles.
+        return None
+    userns_enabled, apparmor_restricted, unconfined_restricted = values
+    if userns_enabled == 1 and apparmor_restricted == 1 and unconfined_restricted == 0:
+        return tuple(values)
+    return None
+
+
 def scan_zero_page_mappable(path="/proc/sys/vm/mmap_min_addr"):
     """Retourne 0 si les processus peuvent demander une projection a l'adresse nulle."""
     try:
@@ -912,6 +932,18 @@ def audit_kernel():
             f"{userns_path} = 1 et {apparmor_path} = 0. Les comptes ordinaires peuvent creer un user namespace sans la mediation AppArmor prevue par ce kernel ; activer la restriction seulement apres avoir profile les navigateurs et conteneurs qui en dependent.",
             "LOW",
             verify=f"cat {userns_path} {apparmor_path}; runuser -u nobody -- unshare --user --map-root-user true",
+        )
+
+    # Ubuntu recommande aussi de restreindre les profils explicitement marques
+    # unconfined. Sans ce second verrou, leur politique peut encore autoriser la
+    # creation de userns meme si la mediation generale est active.
+    if scan_unconfined_userns_exception() == (1, 1, 0):
+        path = "/proc/sys/kernel/apparmor_restrict_unprivileged_unconfined"
+        m.add(
+            "Exception userns des profils AppArmor unconfined active",
+            f"{path} = 0 alors que la mediation userns AppArmor est active. Les profils marques unconfined peuvent conserver leur propre permission de creer un namespace utilisateur ; utiliser 1 apres verification des profils applicatifs.",
+            "LOW",
+            verify="sysctl kernel.unprivileged_userns_clone kernel.apparmor_restrict_unprivileged_userns kernel.apparmor_restrict_unprivileged_unconfined",
         )
 
     # Interdire la premiere page empeche un processus non privilegie d'y placer
