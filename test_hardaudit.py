@@ -32,6 +32,7 @@ from hardaudit import (
     scan_unsafe_ipv4_redirect_senders,
     scan_unsafe_ipv4_redirects,
     scan_unsafe_ipv6_redirects,
+    scan_ipv6_routers_accepting_ra,
     scan_unprotected_reverse_paths,
     scan_unsafe_suid_dumps,
     scan_unbounded_core_pipe,
@@ -393,6 +394,40 @@ class IcmpV6RedirectTests(unittest.TestCase):
         for interface, accept_redirects, forwarding in findings:
             self.assertNotIn(interface, ("all", "default", "lo"))
             self.assertEqual((accept_redirects, forwarding), (1, 0))
+
+
+class IPv6RouterAdvertisementTests(unittest.TestCase):
+    def _write_interface(self, root, interface, accept_ra, forwarding):
+        interface_dir = os.path.join(root, interface)
+        os.makedirs(interface_dir)
+        for name, value in (("accept_ra", accept_ra), ("forwarding", forwarding)):
+            with open(os.path.join(interface_dir, name), "w", encoding="utf-8") as f:
+                f.write(f"{value}\n")
+
+    def test_only_forwarding_interfaces_with_override_mode_are_reported(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_interface(root, "all", 2, 1)
+            self._write_interface(root, "default", 2, 1)
+            self._write_interface(root, "eth0", 2, 1)
+            self._write_interface(root, "eth1", 1, 1)
+            self._write_interface(root, "eth2", 2, 0)
+            self._write_interface(root, "lo", 2, 1)
+            self.assertEqual(scan_ipv6_routers_accepting_ra(root), [("eth0", 2, 1)])
+
+        with patch("hardaudit.scan_ipv6_routers_accepting_ra", return_value=[("eth0", 2, 1)]), \
+                patch("hardaudit.scan_unsafe_ipv6_redirects", return_value=[]):
+            findings = [f for f in audit_network().findings if "Router Advertisement" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("eth0", findings[0].detail)
+
+    def test_live_policy_is_exercised_read_only(self):
+        root = "/proc/sys/net/ipv6/conf"
+        if not os.path.exists(root):
+            self.skipTest("IPv6 controls are not exposed by this kernel")
+        findings = scan_ipv6_routers_accepting_ra(root)
+        self.assertTrue(all(accept_ra == 2 and forwarding == 1
+                            for _, accept_ra, forwarding in findings))
 
 
 class IcmpRedirectSenderTests(unittest.TestCase):

@@ -108,7 +108,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 |---|---|---|---|
 | Utilisateurs | 12 | CIS 5.x | Root accessible, UID 0 non-root, sudo sans mdp, umask |
 | SSH | 12 | CIS 5.2 / ANSSI R5 | PermitRootLogin, PasswordAuth, X11Forwarding, port |
-| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), journalisation des sources IPv4 impossibles, routage inhabituel de `127/8`, acceptation et émission effectives des redirects ICMP IPv4, acceptation des redirects ICMPv6 par interface |
+| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), journalisation des sources IPv4 impossibles, routage inhabituel de `127/8`, redirects ICMP IPv4/IPv6 et routeurs acceptant encore les annonces IPv6 (`accept_ra=2`) |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
 | Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés et collecteurs pipe sans borne, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrous kexec/modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
@@ -177,6 +177,9 @@ grep -H . /proc/sys/net/ipv4/conf/{all,default,*/}{send_redirects,forwarding} 2>
 
 # Redirects ICMPv6 : actifs sur une interface hôte si accept_redirects=1 et forwarding=0
 grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_redirects,forwarding} 2>/dev/null
+
+# Annonces de routeur IPv6 : accept_ra=2 outrepasse le forwarding actif
+grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_ra,forwarding} 2>/dev/null
 
 # Processus utilisant encore un ancien binaire après mise à jour
 sudo ls -l /proc/PID/exe
@@ -286,7 +289,9 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 
 > **Faux positif émission de redirects :** HardAudit ne signale que les interfaces qui routent réellement et dont `send_redirects` est effectif (`all=1` **ou** `interface=1`). Un routeur administré peut en avoir besoin ; le finding `LOW` indique une capacité active, pas un détournement en cours.
 
-> **Faux positif redirects ICMPv6 :** l'acceptation est le comportement hôte par défaut de Linux et peut être nécessaire sur un réseau administré. HardAudit signale les interfaces concernées, y compris virtuelles, car une valeur globale à `0` ne neutralise pas leurs valeurs locales. Le finding prouve une capacité active, pas une attaque en cours.
+> **Faux positif redirects ICMPv6 :** l'acceptation est le comportement hôte Linux par défaut et peut être nécessaire sur un réseau administré. HardAudit signale les interfaces concernées, y compris virtuelles, car une valeur globale à `0` ne neutralise pas leurs valeurs locales. Le finding prouve une capacité active, pas une attaque en cours.
+
+> **Faux positif Router Advertisement :** `accept_ra=2` est volontaire sur certains routeurs qui doivent apprendre leur route amont par IPv6 tout en transférant les paquets. HardAudit ne signale que ce couple avec `forwarding=1` ; valider l'architecture avant de revenir à `0` ou `1`.
 
 > **Faux positif memfd :** des runtimes, navigateurs ou moteurs JIT peuvent légitimement exécuter du code depuis un memfd. Le mode `1` conserve cette possibilité avec `MFD_EXEC` explicite ; le mode `2` la bloque et doit être testé avec les applications avant déploiement.
 

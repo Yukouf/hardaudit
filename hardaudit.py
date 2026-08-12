@@ -371,6 +371,32 @@ def scan_unsafe_ipv6_redirects(root="/proc/sys/net/ipv6/conf"):
     return findings
 
 
+def scan_ipv6_routers_accepting_ra(root="/proc/sys/net/ipv6/conf"):
+    """Liste les interfaces routeur qui acceptent encore les annonces IPv6."""
+    try:
+        interfaces = os.listdir(root)
+    except OSError:
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            with open(os.path.join(root, interface, "accept_ra"), encoding="utf-8") as f:
+                accept_ra = int(f.read().strip())
+            with open(os.path.join(root, interface, "forwarding"), encoding="utf-8") as f:
+                forwarding = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+
+        # Le mode 2 outrepasse explicitement le comportement routeur : les RA
+        # restent acceptées même quand le forwarding local est actif.
+        if accept_ra == 2 and forwarding == 1:
+            findings.append((interface, accept_ra, forwarding))
+    return findings
+
+
 def audit_network(allowed_ports=None):
     m = Module("Reseau & Ports", 12, "CIS 3.x")
     allowed_ports = {str(port) for port in (allowed_ports or set())}
@@ -456,6 +482,16 @@ def audit_network(allowed_ports=None):
                 f"Interfaces hote concernees : {interfaces}. Un voisin IPv6 peut proposer une autre route ; desactiver accept_redirects sauf besoin explicite et verifier aussi les interfaces virtuelles.",
                 "MEDIUM",
                 verify="grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_redirects,forwarding} 2>/dev/null",
+            )
+
+        ipv6_routers_accepting_ra = scan_ipv6_routers_accepting_ra()
+        if ipv6_routers_accepting_ra:
+            interfaces = ", ".join(item[0] for item in ipv6_routers_accepting_ra)
+            m.add(
+                "Routeur acceptant les Router Advertisements IPv6",
+                f"Interfaces concernees : {interfaces}. accept_ra=2 outrepasse le mode routeur : un voisin peut encore fournir une route ou des prefixes IPv6. Garder ce mode seulement pour un routeur qui doit aussi apprendre sa connectivite par RA.",
+                "LOW",
+                verify="grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_ra,forwarding} 2>/dev/null",
             )
     except Exception as e:
         m.add("Erreur audit reseau", str(e), "MEDIUM")
