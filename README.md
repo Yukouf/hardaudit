@@ -108,7 +108,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 |---|---|---|---|
 | Utilisateurs | 12 | CIS 5.x | Root accessible, UID 0 non-root, sudo sans mdp, umask |
 | SSH | 12 | CIS 5.2 / ANSSI R5 | PermitRootLogin, PasswordAuth, X11Forwarding, port |
-| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), routage inhabituel de `127/8`, acceptation et émission effectives des redirects ICMP IPv4, acceptation des redirects ICMPv6 par interface |
+| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), journalisation des sources IPv4 impossibles, routage inhabituel de `127/8`, acceptation et émission effectives des redirects ICMP IPv4, acceptation des redirects ICMPv6 par interface |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
 | Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés et collecteurs pipe sans borne, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrous kexec/modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
@@ -160,6 +160,10 @@ sudo ss -ltnp
 # Validation de l'adresse source IPv4 (0 = absente, 1 = stricte, 2 = souple)
 sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter
 grep -H . /proc/sys/net/ipv4/conf/*/rp_filter
+
+# Paquets aux adresses source impossibles : "all=1" OU la valeur locale active le journal
+grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/log_martians 2>/dev/null
+journalctl -k | grep -i martian
 
 # Routage des adresses loopback 127/8 hors de l'hôte (1 = autorisé)
 grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/route_localnet 2>/dev/null
@@ -273,6 +277,8 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 > **Faux positif core_pipe_limit :** une valeur `0` n'est signalée que si `core_pattern` lance réellement un helper avec `|`. Une borne positive limite le nombre de collecteurs concurrents mais peut faire sauter des dumps lors d'une vague de crash ; dimensionner selon la capacité et les besoins de diagnostic.
 
 > **Faux positif rp_filter :** le mode strict `1` peut casser le routage asymétrique ou certains montages multi-interface. Le mode souple `2` vérifie que la source est joignable par une interface et constitue alors le compromis documenté par le kernel ; HardAudit accepte les deux et tient compte du maximum entre `conf/all` et chaque interface.
+
+> **Faux positif log_martians :** ce réglage améliore la visibilité mais ne remplace ni `rp_filter` ni un firewall. Sur un réseau bruité ou volontairement asymétrique, il peut remplir les journaux ; dimensionner la rotation et corriger les routes légitimes avant de l'activer partout.
 
 > **Faux positif route_localnet :** les proxies transparents et certaines publications de ports conteneurisés utilisent volontairement le routage de `127/8`. La valeur `all=1` **ou** celle d'une interface à `1` suffit ; vérifier les règles NAT avant de désactiver ce mode. Le finding signale que la barrière loopback est retirée, pas qu'un service est déjà exposé.
 

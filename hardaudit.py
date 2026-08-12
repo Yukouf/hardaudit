@@ -232,6 +232,30 @@ def scan_unprotected_reverse_paths(root="/proc/sys/net/ipv4/conf"):
     return findings
 
 
+def scan_unlogged_martian_interfaces(root="/proc/sys/net/ipv4/conf"):
+    """Liste les interfaces qui ne journalisent pas les paquets aux sources impossibles."""
+    try:
+        with open(os.path.join(root, "all", "log_martians"), encoding="utf-8") as f:
+            all_value = int(f.read().strip())
+        interfaces = os.listdir(root)
+    except (OSError, ValueError):
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            with open(os.path.join(root, interface, "log_martians"), encoding="utf-8") as f:
+                interface_value = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        # Le kernel active ce journal si "all" OU la valeur locale vaut 1.
+        if all_value == 0 and interface_value == 0:
+            findings.append((interface, all_value, interface_value))
+    return findings
+
+
 def scan_routed_loopback_interfaces(root="/proc/sys/net/ipv4/conf"):
     """Liste les interfaces où 127/8 peut être routé hors du loopback."""
     try:
@@ -382,6 +406,16 @@ def audit_network(allowed_ports=None):
                 f"rp_filter vaut effectivement 0 sur : {interfaces}. Le mode 1 est strict ; utiliser 2 si le routage asymetrique exige un mode plus compatible.",
                 "LOW",
                 verify="sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter; grep -H . /proc/sys/net/ipv4/conf/*/rp_filter",
+            )
+
+        unlogged_martians = scan_unlogged_martian_interfaces()
+        if unlogged_martians:
+            interfaces = ", ".join(item[0] for item in unlogged_martians)
+            m.add(
+                "Paquets IPv4 aux sources impossibles non journalises",
+                f"log_martians vaut effectivement 0 sur : {interfaces}. Le kernel rejettera encore selon ses controles reseau, mais l'indice disparait des logs ; activer apres avoir dimensionne la journalisation.",
+                "LOW",
+                verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/log_martians 2>/dev/null; journalctl -k | grep -i martian",
             )
 
         routed_loopback = scan_routed_loopback_interfaces()

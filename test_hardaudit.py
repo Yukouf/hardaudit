@@ -26,6 +26,7 @@ from hardaudit import (
     scan_deleted_executables,
     scan_fs_link_protections,
     scan_mount_options,
+    scan_unlogged_martian_interfaces,
     scan_proc_hidepid,
     scan_routed_loopback_interfaces,
     scan_unsafe_ipv4_redirect_senders,
@@ -265,6 +266,35 @@ class ReversePathFilteringTests(unittest.TestCase):
         for interface, all_value, interface_value in findings:
             self.assertNotEqual(interface, "lo")
             self.assertEqual(max(all_value, interface_value), 0)
+
+
+class MartianPacketLoggingTests(unittest.TestCase):
+    def _write_value(self, root, interface, value):
+        interface_dir = os.path.join(root, interface)
+        os.makedirs(interface_dir, exist_ok=True)
+        with open(os.path.join(interface_dir, "log_martians"), "w", encoding="utf-8") as f:
+            f.write(f"{value}\n")
+
+    def test_reports_only_interfaces_without_effective_logging(self):
+        with tempfile.TemporaryDirectory() as root:
+            for interface, value in (("all", 0), ("default", 0), ("lo", 0),
+                                     ("eth0", 0), ("eth1", 1)):
+                self._write_value(root, interface, value)
+            self.assertEqual(scan_unlogged_martian_interfaces(root), [("eth0", 0, 0)])
+
+    def test_representative_global_policy_enables_every_interface(self):
+        with tempfile.TemporaryDirectory() as root:
+            for interface, value in (("all", 1), ("default", 0), ("eth0", 0), ("eth1", 0)):
+                self._write_value(root, interface, value)
+            self.assertEqual(scan_unlogged_martian_interfaces(root), [])
+
+    def test_live_policy_is_exercised_read_only(self):
+        root = "/proc/sys/net/ipv4/conf"
+        if not os.path.exists(os.path.join(root, "all", "log_martians")):
+            self.skipTest("log_martians is not exposed by this kernel")
+        findings = scan_unlogged_martian_interfaces(root)
+        self.assertTrue(all(all_value == 0 and local_value == 0
+                            for _, all_value, local_value in findings))
 
 
 class IcmpRedirectTests(unittest.TestCase):
@@ -954,9 +984,10 @@ class FalsePositiveRegressionTests(unittest.TestCase):
     @patch("hardaudit.scan_unsafe_ipv4_redirect_senders", return_value=[])
     @patch("hardaudit.scan_unsafe_ipv4_redirects", return_value=[])
     @patch("hardaudit.scan_unsafe_ipv6_redirects", return_value=[])
+    @patch("hardaudit.scan_unlogged_martian_interfaces", return_value=[])
     @patch("hardaudit.scan_unprotected_reverse_paths", return_value=[])
     @patch("hardaudit._capture")
-    def test_allowed_port_stays_visible_without_penalty(self, capture, _rp, _ipv6, _accept, _send):
+    def test_allowed_port_stays_visible_without_penalty(self, capture, _rp, _martians, _ipv6, _accept, _send):
         capture.return_value = (0, "LISTEN 0 128 0.0.0.0:3306 0.0.0.0:*\nLISTEN 0 128 *:10050 *:*")
         module = audit_network(allowed_ports={"3306"})
         self.assertEqual(module.score, 9)
