@@ -29,6 +29,7 @@ from hardaudit import (
     scan_unlogged_martian_interfaces,
     scan_proc_hidepid,
     scan_routed_loopback_interfaces,
+    scan_unsafe_ipv4_source_routing,
     scan_unsafe_ipv4_redirect_senders,
     scan_unsafe_ipv4_redirects,
     scan_unsafe_ipv6_redirects,
@@ -267,6 +268,49 @@ class ReversePathFilteringTests(unittest.TestCase):
         for interface, all_value, interface_value in findings:
             self.assertNotEqual(interface, "lo")
             self.assertEqual(max(all_value, interface_value), 0)
+
+
+class IPv4SourceRoutingTests(unittest.TestCase):
+    def _write_value(self, root, interface, value):
+        interface_dir = os.path.join(root, interface)
+        os.makedirs(interface_dir, exist_ok=True)
+        with open(os.path.join(interface_dir, "accept_source_route"), "w", encoding="utf-8") as f:
+            f.write(f"{value}\n")
+
+    def test_requires_global_and_interface_values_to_accept_source_routes(self):
+        with tempfile.TemporaryDirectory() as root:
+            for interface, value in (
+                ("all", 0), ("default", 1), ("lo", 1),
+                ("eth0", 1), ("eth1", 0),
+            ):
+                self._write_value(root, interface, value)
+            self.assertEqual(scan_unsafe_ipv4_source_routing(root), [])
+
+            self._write_value(root, "all", 1)
+            self.assertEqual(
+                scan_unsafe_ipv4_source_routing(root),
+                [("eth0", 1, 1)],
+            )
+
+        with patch(
+            "hardaudit.scan_unsafe_ipv4_source_routing",
+            return_value=[("eth0", 1, 1)],
+        ):
+            findings = [
+                finding for finding in audit_network().findings
+                if "impose par la source" in finding.title
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "HIGH")
+        self.assertIn("SRR", findings[0].detail)
+
+    def test_representative_live_policy_is_exercised_read_only(self):
+        root = "/proc/sys/net/ipv4/conf"
+        if not os.path.exists(os.path.join(root, "all", "accept_source_route")):
+            self.skipTest("accept_source_route is not exposed by this kernel")
+        findings = scan_unsafe_ipv4_source_routing(root)
+        self.assertTrue(all(global_value == 1 and local_value == 1
+                            for _, global_value, local_value in findings))
 
 
 class MartianPacketLoggingTests(unittest.TestCase):

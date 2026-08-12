@@ -232,6 +232,33 @@ def scan_unprotected_reverse_paths(root="/proc/sys/net/ipv4/conf"):
     return findings
 
 
+def scan_unsafe_ipv4_source_routing(root="/proc/sys/net/ipv4/conf"):
+    """Liste les interfaces qui acceptent effectivement les routes source IPv4."""
+    try:
+        with open(os.path.join(root, "all", "accept_source_route"), encoding="utf-8") as f:
+            all_value = int(f.read().strip())
+        interfaces = os.listdir(root)
+    except (OSError, ValueError):
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            with open(
+                os.path.join(root, interface, "accept_source_route"), encoding="utf-8"
+            ) as f:
+                interface_value = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        # La documentation du kernel exige que la politique globale ET celle de
+        # l'interface autorisent l'option SRR avant qu'un paquet soit accepté.
+        if all_value == 1 and interface_value == 1:
+            findings.append((interface, all_value, interface_value))
+    return findings
+
+
 def scan_unlogged_martian_interfaces(root="/proc/sys/net/ipv4/conf"):
     """Liste les interfaces qui ne journalisent pas les paquets aux sources impossibles."""
     try:
@@ -432,6 +459,16 @@ def audit_network(allowed_ports=None):
                 f"rp_filter vaut effectivement 0 sur : {interfaces}. Le mode 1 est strict ; utiliser 2 si le routage asymetrique exige un mode plus compatible.",
                 "LOW",
                 verify="sysctl net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter; grep -H . /proc/sys/net/ipv4/conf/*/rp_filter",
+            )
+
+        source_routing = scan_unsafe_ipv4_source_routing()
+        if source_routing:
+            interfaces = ", ".join(item[0] for item in source_routing)
+            m.add(
+                "Routage impose par la source IPv4 accepte",
+                f"accept_source_route vaut 1 globalement et sur : {interfaces}. Un paquet peut alors proposer lui-meme une partie de son trajet via l'option SRR ; desactiver sauf besoin de routage historique explicitement documente.",
+                "HIGH",
+                verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/accept_source_route 2>/dev/null",
             )
 
         unlogged_martians = scan_unlogged_martian_interfaces()
