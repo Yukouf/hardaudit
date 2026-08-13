@@ -193,6 +193,7 @@ sudo ps -fp PID
 
 # Protections contre les fichiers et liens piégés dans les dossiers partagés
 sysctl fs.protected_hardlinks fs.protected_symlinks fs.protected_fifos fs.protected_regular
+# Pour protected_fifos/regular : 1 couvre les dossiers sticky publics, 2 inclut ceux partagés par groupe
 
 # Visibilité des processus entre comptes locaux (hidepid=0 par défaut, 1/2/4 restreints)
 findmnt /proc -o TARGET,FSTYPE,OPTIONS
@@ -311,6 +312,8 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 > **Faux positif oops_limit :** `panic_on_oops=1` arrête immédiatement la machine au premier oops, ce qui peut transformer un bug en indisponibilité. HardAudit ne l'exige pas : il signale uniquement le couple `panic_on_oops=0` et `oops_limit=0`, qui désactive toute borne liée au nombre d'oops. Une valeur positive conserve une marge de diagnostic tout en limitant les répétitions.
 
 > **Faux positif quotas de pipes :** `pipe-user-pages-hard=0` seul est la valeur par défaut et ne signifie pas forcément « illimité en pratique » : une borne souple positive réduit déjà les nouveaux pipes après dépassement. HardAudit ne signale que le couple `soft=0, hard=0`. Dimensionner ces quotas selon le nombre de workers et la mémoire disponible ; une valeur trop basse peut casser des charges légitimes.
+
+> **Faux positif fichiers temporaires :** `protected_fifos=1` et `protected_regular=1` protègent déjà les dossiers sticky accessibles à tous, mais pas ceux inscriptibles par un groupe. HardAudit recommande `2` pour couvrir aussi ce cas ; conserver `1` peut être volontaire si des applications d'un groupe partagé doivent rouvrir avec `O_CREAT` des objets qu'elles ne possèdent pas.
 
 > **Faux positif rp_filter :** le mode strict `1` peut casser le routage asymétrique ou certains montages multi-interface. Le mode souple `2` vérifie que la source est joignable par une interface et constitue alors le compromis documenté par le kernel ; HardAudit accepte les deux et tient compte du maximum entre `conf/all` et chaque interface.
 

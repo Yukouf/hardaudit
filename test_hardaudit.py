@@ -97,18 +97,18 @@ class FilesystemProtectionTests(unittest.TestCase):
             with open(os.path.join(root, name), "w", encoding="utf-8") as f:
                 f.write(f"{value}\n")
 
-    def test_disabled_protections_are_reported_but_stronger_value_is_accepted(self):
+    def test_weak_protections_are_reported_but_stronger_value_is_accepted(self):
         with tempfile.TemporaryDirectory() as root:
             self._write_sysctls(root, {
                 "protected_hardlinks": 0,
                 "protected_symlinks": 1,
-                "protected_fifos": 0,
+                "protected_fifos": 1,
                 "protected_regular": 2,
             })
             findings = scan_fs_link_protections(root)
             self.assertEqual(
                 [finding[0] for finding in findings],
-                ["Hardlinks non proteges", "FIFO non proteges"],
+                ["Hardlinks non proteges", "FIFO insuffisamment proteges"],
             )
 
     def test_representative_hardened_linux_values_pass(self):
@@ -116,7 +116,7 @@ class FilesystemProtectionTests(unittest.TestCase):
             self._write_sysctls(root, {
                 "protected_hardlinks": 1,
                 "protected_symlinks": 1,
-                "protected_fifos": 1,
+                "protected_fifos": 2,
                 "protected_regular": 2,
             })
             self.assertEqual(scan_fs_link_protections(root), [])

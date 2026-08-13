@@ -642,8 +642,10 @@ def scan_fs_link_protections(sysctl_root="/proc/sys/fs"):
     checks = {
         "protected_hardlinks": (1, "Hardlinks non proteges"),
         "protected_symlinks": (1, "Symlinks non proteges"),
-        "protected_fifos": (1, "FIFO non proteges"),
-        "protected_regular": (1, "Fichiers reguliers non proteges"),
+        # Le mode 1 ne couvre que les repertoires sticky world-writable. Le
+        # mode 2 etend O_CREAT aux repertoires sticky group-writable.
+        "protected_fifos": (2, "FIFO insuffisamment proteges"),
+        "protected_regular": (2, "Fichiers reguliers insuffisamment proteges"),
     }
     findings = []
     for name, (minimum, title) in checks.items():
