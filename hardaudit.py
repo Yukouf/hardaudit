@@ -843,6 +843,29 @@ def scan_kexec_enabled(path="/proc/sys/kernel/kexec_load_disabled"):
     return value if value == 0 else None
 
 
+def scan_unlimited_kexec_loads(
+    reboot_path="/proc/sys/kernel/kexec_load_limit_reboot",
+    panic_path="/proc/sys/kernel/kexec_load_limit_panic",
+):
+    """Liste les types d'image kexec dont le nombre de chargements est illimite.
+
+    Ces compteurs ne peuvent qu'etre rendus plus restrictifs. Leur absence est
+    traitee comme une fonctionnalite kernel indisponible, pas comme une faiblesse.
+    """
+    unlimited = []
+    readable = False
+    for image_type, path in (("reboot", reboot_path), ("panic", panic_path)):
+        try:
+            with open(path, encoding="utf-8") as f:
+                value = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        readable = True
+        if value == -1:
+            unlimited.append(image_type)
+    return tuple(unlimited) if readable else None
+
+
 def scan_module_loading_unlocked(path="/proc/sys/kernel/modules_disabled"):
     """Retourne 0 si le chargement et le retrait de modules restent autorises."""
     try:
@@ -1270,14 +1293,21 @@ def audit_kernel():
 
     # Ce verrou est irreversible jusqu'au prochain demarrage. Il empeche meme
     # root de remplacer le kernel en memoire, mais doit rester disponible sur
-    # les hotes qui utilisent volontairement kexec ou kdump.
+    # les hotes qui utilisent volontairement kexec ou kdump. Les deux compteurs
+    # limitent separement les images normales et de crash sans fermer kexec.
     if scan_kexec_enabled() == 0:
         path = "/proc/sys/kernel/kexec_load_disabled"
+        unlimited = scan_unlimited_kexec_loads()
+        limit_detail = (
+            f" Les chargements d'images {', '.join(unlimited)} sont en plus sans limite (-1) ; "
+            "fixer un nombre positif adapte peut reduire l'exposition sans desactiver kexec."
+            if unlimited else ""
+        )
         m.add(
             "Remplacement du kernel par kexec encore autorise",
-            f"{path} = 0. Le verrou kexec n'est pas active ; envisager 1 seulement si ni kexec ni kdump ne sont requis (irreversible jusqu'au redemarrage).",
+            f"{path} = 0. Le verrou kexec n'est pas active ; envisager 1 seulement si ni kexec ni kdump ne sont requis (irreversible jusqu'au redemarrage).{limit_detail}",
             "LOW",
-            verify=f"cat {path}",
+            verify="sysctl kernel.kexec_load_disabled kernel.kexec_load_limit_reboot kernel.kexec_load_limit_panic",
         )
 
     # Sur une appliance stable, ce verrou retire toute la surface de chargement

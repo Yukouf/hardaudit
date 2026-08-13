@@ -111,7 +111,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 | Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), refus des routes IPv4 imposées par la source, en-têtes de routage IPv6 type 2, journalisation des sources impossibles, routage inhabituel de `127/8`, redirects ICMP IPv4/IPv6 et routeurs acceptant encore les annonces IPv6 (`accept_ra=2`) |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
-| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés et collecteurs pipe sans borne, répétition illimitée des oops kernel, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrous kexec/modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
+| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, ptrace, perf_events, syncookies, pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés et collecteurs pipe sans borne, répétition illimitée des oops kernel, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
 | Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires supprimés encore actifs |
 | Filesystem | 10 | CIS 1.1 / ANSSI R28 | `/tmp` exécutable, cloisonnement `nodev,nosuid,noexec` de `/dev/shm`, world-writable, sticky bit, shadow, visibilité inter-utilisateurs de `/proc` |
 | Logs | 8 | CIS 4.x | auditd, rsyslog, logrotate |
@@ -259,6 +259,9 @@ sysctl dev.tty.legacy_tiocsti
 # Verrou kexec (1 = aucun nouveau kernel chargeable, irréversible jusqu'au redémarrage)
 sysctl kernel.kexec_load_disabled
 
+# Compteurs kexec : -1 = chargements illimités ; une valeur positive décroît à chaque chargement
+sysctl kernel.kexec_load_limit_reboot kernel.kexec_load_limit_panic
+
 # Verrou des modules (1 = ni chargement ni retrait, irréversible jusqu'au redémarrage)
 sysctl kernel.modules_disabled
 lsmod
@@ -276,7 +279,7 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 
 > **Important :** le score est un indicateur de triage, pas une certification CIS/ANSSI. Un finding prouve une configuration observée, pas automatiquement une compromission. Le contexte de la machine reste indispensable.
 
-> **Faux positif kexec :** conserver `kernel.kexec_load_disabled=0` est légitime sur un hôte utilisant `kexec` ou `kdump`. Ne jamais passer ce verrou à `1` avant d'avoir vérifié ces usages : le kernel documente qu'il ne peut plus être annulé avant un redémarrage.
+> **Faux positif kexec :** conserver `kernel.kexec_load_disabled=0` est légitime sur un hôte utilisant `kexec` ou `kdump`. Les limites `kexec_load_limit_reboot` et `kexec_load_limit_panic` permettent alors de borner séparément les chargements normaux et de crash, mais ne peuvent être rendues que plus restrictives ; dimensionner les valeurs selon les redémarrages et crash dumps attendus. Ne jamais passer le verrou global à `1` avant d'avoir vérifié ces usages : il ne peut plus être annulé avant un redémarrage.
 
 > **Faux positif modules :** conserver `kernel.modules_disabled=0` est normal sur une machine qui utilise le hotplug, DKMS ou charge encore des pilotes après le démarrage. La valeur `1` vise surtout les appliances stables ; elle bloque aussi le retrait des modules et ne peut plus être annulée avant un redémarrage.
 

@@ -23,6 +23,7 @@ from hardaudit import (
     scan_kernel_lockdown_disabled,
     scan_binfmt_credential_entries,
     scan_kexec_enabled,
+    scan_unlimited_kexec_loads,
     scan_executable_memfd_default,
     scan_deleted_executables,
     scan_fs_link_protections,
@@ -983,6 +984,30 @@ class KexecRestrictionTests(unittest.TestCase):
             sysctl.write("1\n")
             sysctl.flush()
             self.assertIsNone(scan_kexec_enabled(sysctl.name))
+
+    def test_unlimited_normal_and_crash_kexec_loads_are_detected(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as reboot, \
+                tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as panic:
+            reboot.write("-1\n"); reboot.flush()
+            panic.write("-1\n"); panic.flush()
+            self.assertEqual(
+                scan_unlimited_kexec_loads(reboot.name, panic.name),
+                ("reboot", "panic"),
+            )
+
+    def test_representative_bounded_kexec_policy_passes(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as reboot, \
+                tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as panic:
+            reboot.write("1\n"); reboot.flush()
+            panic.write("2\n"); panic.flush()
+            self.assertEqual(scan_unlimited_kexec_loads(reboot.name, panic.name), ())
+
+    def test_kexec_finding_reports_unlimited_image_replacement_attempts(self):
+        with patch("hardaudit.scan_kexec_enabled", return_value=0), \
+                patch("hardaudit.scan_unlimited_kexec_loads", return_value=("reboot", "panic")):
+            findings = [f for f in audit_kernel().findings if "kexec" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertIn("sans limite", findings[0].detail)
 
 
 class KernelModuleLoadingLockTests(unittest.TestCase):
