@@ -346,6 +346,50 @@ class IPv4SourceRoutingTests(unittest.TestCase):
                             for _, global_value, local_value in findings))
 
 
+class IPv6SourceRoutingTests(unittest.TestCase):
+    def _write_value(self, root, interface, value):
+        interface_dir = os.path.join(root, interface)
+        os.makedirs(interface_dir, exist_ok=True)
+        with open(os.path.join(interface_dir, "accept_source_route"), "w", encoding="utf-8") as f:
+            f.write(f"{value}\n")
+
+    def test_requires_non_negative_global_and_interface_values(self):
+        with tempfile.TemporaryDirectory() as root:
+            for interface, value in (
+                ("all", 0), ("default", 0), ("lo", 0),
+                ("eth0", 0), ("eth1", -1), ("eth2", 1),
+            ):
+                self._write_value(root, interface, value)
+            self.assertEqual(
+                hardaudit.scan_unsafe_ipv6_source_routing(root),
+                [("eth0", 0, 0), ("eth2", 0, 1)],
+            )
+
+            self._write_value(root, "all", -1)
+            self.assertEqual(hardaudit.scan_unsafe_ipv6_source_routing(root), [])
+
+    def test_network_audit_reports_ipv6_routing_header_acceptance(self):
+        with patch(
+            "hardaudit.scan_unsafe_ipv6_source_routing",
+            return_value=[("eth0", 0, 0)],
+        ):
+            findings = [
+                finding for finding in audit_network().findings
+                if "extension de routage ipv6" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "MEDIUM")
+        self.assertIn("type 2", findings[0].detail)
+
+    def test_representative_live_policy_is_exercised_read_only(self):
+        root = "/proc/sys/net/ipv6/conf"
+        if not os.path.exists(os.path.join(root, "all", "accept_source_route")):
+            self.skipTest("IPv6 accept_source_route is not exposed by this kernel")
+        findings = hardaudit.scan_unsafe_ipv6_source_routing(root)
+        self.assertTrue(all(global_value >= 0 and local_value >= 0
+                            for _, global_value, local_value in findings))
+
+
 class MartianPacketLoggingTests(unittest.TestCase):
     def _write_value(self, root, interface, value):
         interface_dir = os.path.join(root, interface)
@@ -1177,10 +1221,13 @@ class FalsePositiveRegressionTests(unittest.TestCase):
     @patch("hardaudit.scan_unsafe_ipv4_redirect_senders", return_value=[])
     @patch("hardaudit.scan_unsafe_ipv4_redirects", return_value=[])
     @patch("hardaudit.scan_unsafe_ipv6_redirects", return_value=[])
+    @patch("hardaudit.scan_unsafe_ipv6_source_routing", return_value=[])
     @patch("hardaudit.scan_unlogged_martian_interfaces", return_value=[])
     @patch("hardaudit.scan_unprotected_reverse_paths", return_value=[])
     @patch("hardaudit._capture")
-    def test_allowed_port_stays_visible_without_penalty(self, capture, _rp, _martians, _ipv6, _accept, _send):
+    def test_allowed_port_stays_visible_without_penalty(
+        self, capture, _rp, _martians, _ipv6_source, _ipv6_redirect, _accept, _send
+    ):
         capture.return_value = (0, "LISTEN 0 128 0.0.0.0:3306 0.0.0.0:*\nLISTEN 0 128 *:10050 *:*")
         module = audit_network(allowed_ports={"3306"})
         self.assertEqual(module.score, 9)

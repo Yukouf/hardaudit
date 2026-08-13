@@ -259,6 +259,33 @@ def scan_unsafe_ipv4_source_routing(root="/proc/sys/net/ipv4/conf"):
     return findings
 
 
+def scan_unsafe_ipv6_source_routing(root="/proc/sys/net/ipv6/conf"):
+    """Liste les interfaces qui acceptent l'en-tete de routage IPv6 type 2."""
+    try:
+        with open(os.path.join(root, "all", "accept_source_route"), encoding="utf-8") as f:
+            all_value = int(f.read().strip())
+        interfaces = os.listdir(root)
+    except (OSError, ValueError):
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            with open(
+                os.path.join(root, interface, "accept_source_route"), encoding="utf-8"
+            ) as f:
+                interface_value = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        # Le kernel prend le minimum entre la politique globale et locale :
+        # toute valeur negative refuse les routing headers, sinon seul le type 2 passe.
+        if all_value >= 0 and interface_value >= 0:
+            findings.append((interface, all_value, interface_value))
+    return findings
+
+
 def scan_unlogged_martian_interfaces(root="/proc/sys/net/ipv4/conf"):
     """Liste les interfaces qui ne journalisent pas les paquets aux sources impossibles."""
     try:
@@ -469,6 +496,16 @@ def audit_network(allowed_ports=None):
                 f"accept_source_route vaut 1 globalement et sur : {interfaces}. Un paquet peut alors proposer lui-meme une partie de son trajet via l'option SRR ; desactiver sauf besoin de routage historique explicitement documente.",
                 "HIGH",
                 verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/accept_source_route 2>/dev/null",
+            )
+
+        ipv6_source_routing = scan_unsafe_ipv6_source_routing()
+        if ipv6_source_routing:
+            interfaces = ", ".join(item[0] for item in ipv6_source_routing)
+            m.add(
+                "Extension de routage IPv6 type 2 acceptee",
+                f"accept_source_route est non negatif globalement et sur : {interfaces}. Linux refuse les autres types mais accepte encore le type 2 lie a Mobile IPv6 ; passer la politique globale ou locale a -1 sauf besoin documente.",
+                "MEDIUM",
+                verify="grep -H . /proc/sys/net/ipv6/conf/{all,default,*}/accept_source_route 2>/dev/null",
             )
 
         unlogged_martians = scan_unlogged_martian_interfaces()
