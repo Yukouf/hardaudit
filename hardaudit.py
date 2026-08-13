@@ -765,6 +765,39 @@ def scan_unbounded_core_pipe(
     return None
 
 
+def scan_unsafe_core_pipe_helper(core_pattern_path="/proc/sys/kernel/core_pattern"):
+    """Retourne le premier composant non-root ou inscriptible d'un helper core pipe."""
+    try:
+        with open(core_pattern_path, encoding="utf-8") as f:
+            pattern = f.read().strip()
+    except OSError:
+        return None
+    if not pattern.startswith("|"):
+        return None
+
+    command = pattern[1:].lstrip()
+    if not command:
+        return None
+    helper = command.split(None, 1)[0]
+    if not os.path.isabs(helper):
+        return None
+
+    resolved = os.path.realpath(helper)
+    current = "/"
+    for component in resolved.strip("/").split("/"):
+        current = os.path.join(current, component)
+        try:
+            info = os.stat(current)
+        except OSError:
+            return None
+        mode = stat.S_IMODE(info.st_mode)
+        # Le kernel lance ce helper avec les credentials root dans les
+        # namespaces initiaux : tout son chemin doit rester maitrise par root.
+        if info.st_uid != 0 or mode & 0o022:
+            return helper, current, mode, info.st_uid, info.st_gid
+    return None
+
+
 def scan_unprivileged_bpf(path="/proc/sys/kernel/unprivileged_bpf_disabled"):
     """Retourne 0 si les appels BPF non privilegies sont autorises."""
     try:
@@ -1109,6 +1142,16 @@ def audit_kernel():
             f"kernel.core_pattern = {pattern!r} et kernel.core_pipe_limit = {limit}. Les core dumps pipes ignorent RLIMIT_CORE et peuvent lancer un nombre illimite de collecteurs ; fixer une borne positive adaptee a la charge.",
             "LOW",
             verify="sysctl kernel.core_pattern kernel.core_pipe_limit; ulimit -c",
+        )
+
+    unsafe_core_helper = scan_unsafe_core_pipe_helper()
+    if unsafe_core_helper is not None:
+        helper, component, mode, uid, gid = unsafe_core_helper
+        m.add(
+            "Helper de core dump modifiable hors de root",
+            f"kernel.core_pattern lance {helper}, mais {component} a les droits {mode:04o} et appartient a UID {uid}, GID {gid}. Le kernel execute ce helper avec les credentials root dans les namespaces initiaux : verrouiller tout son chemin a root.",
+            "CRITICAL",
+            verify="sysctl kernel.core_pattern; namei -l $(sysctl -n kernel.core_pattern | sed -n 's/^|[[:space:]]*\\([^[:space:]]*\\).*/\\1/p')",
         )
 
     # Continuer apres un oops peut laisser des ressources ou verrous dans un

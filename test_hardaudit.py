@@ -39,6 +39,7 @@ from hardaudit import (
     scan_unprotected_reverse_paths,
     scan_unsafe_suid_dumps,
     scan_unbounded_core_pipe,
+    scan_unsafe_core_pipe_helper,
     scan_unlimited_user_pipe_memory,
     scan_unrestricted_io_uring,
     scan_unmediated_unprivileged_io_uring,
@@ -666,6 +667,48 @@ class CorePipeLimitTests(unittest.TestCase):
     def test_regular_core_file_does_not_need_a_pipe_limit(self):
         with self._sysctl("core.%p") as pattern, self._sysctl(0) as limit:
             self.assertIsNone(scan_unbounded_core_pipe(pattern.name, limit.name))
+
+
+class CorePipeHelperPermissionsTests(unittest.TestCase):
+    def _pattern(self, value):
+        pattern = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        pattern.write(value + "\n")
+        pattern.flush()
+        return pattern
+
+    def test_world_writable_helper_is_reported_as_root_execution_path(self):
+        with tempfile.TemporaryDirectory(dir="/root") as root:
+            helper = os.path.join(root, "collector")
+            with open(helper, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\n")
+            os.chmod(helper, 0o777)
+            with self._pattern(f"|{helper} %P") as pattern:
+                result = scan_unsafe_core_pipe_helper(pattern.name)
+            self.assertEqual(result[:3], (helper, helper, 0o777))
+
+        with patch(
+            "hardaudit.scan_unsafe_core_pipe_helper",
+            return_value=("/opt/collector", "/opt/collector", 0o777, 0, 0),
+        ):
+            findings = [f for f in audit_kernel().findings if "Helper de core dump" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "CRITICAL")
+        self.assertIn("credentials root", findings[0].detail)
+
+    def test_representative_root_owned_non_writable_helper_passes(self):
+        with tempfile.TemporaryDirectory(dir="/root") as root:
+            helper = os.path.join(root, "collector")
+            with open(helper, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\n")
+            os.chmod(helper, 0o755)
+            with self._pattern(f"|{helper} %P") as pattern:
+                self.assertIsNone(scan_unsafe_core_pipe_helper(pattern.name))
+
+    def test_live_core_helper_path_is_exercised_read_only(self):
+        result = scan_unsafe_core_pipe_helper()
+        if result is not None:
+            _, _, mode, uid, _ = result
+            self.assertTrue(uid != 0 or mode & 0o022)
 
 
 class UnprivilegedBpfTests(unittest.TestCase):
