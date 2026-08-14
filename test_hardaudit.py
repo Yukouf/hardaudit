@@ -40,6 +40,7 @@ from hardaudit import (
     scan_unsafe_ipv4_redirect_senders,
     scan_unsafe_ipv4_redirects,
     scan_unsafe_ipv6_redirects,
+    scan_tcp_timewait_assassination,
     scan_ipv6_routers_accepting_ra,
     scan_ipv6_local_router_advertisements,
     scan_unprotected_reverse_paths,
@@ -1393,6 +1394,30 @@ class KernelStackOffsetRandomizationTests(unittest.TestCase):
 
 
 class KernelSysctlSemanticsTests(unittest.TestCase):
+    def test_disabled_rfc1337_protection_is_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
+            policy.write("0\n")
+            policy.flush()
+            self.assertEqual(scan_tcp_timewait_assassination(policy.name), 0)
+
+        with patch("hardaudit.scan_tcp_timewait_assassination", return_value=0):
+            findings = [
+                finding for finding in audit_network().findings
+                if "TIME-WAIT" in finding.title
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("RST", findings[0].detail)
+
+    def test_representative_rfc1337_protection_and_live_policy(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
+            policy.write("1\n")
+            policy.flush()
+            self.assertIsNone(scan_tcp_timewait_assassination(policy.name))
+
+        live = scan_tcp_timewait_assassination()
+        self.assertIn(live, (None, 0))
+
     def test_aslr_entropy_below_architecture_maximum_is_reported(self):
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as bits, \
                 tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as compat, \
@@ -1588,6 +1613,7 @@ class FalsePositiveRegressionTests(unittest.TestCase):
     def test_info_finding_has_no_score_penalty(self):
         self.assertEqual(Finding("Contexte", "Attendu", "INFO").penalty, 0)
 
+    @patch("hardaudit.scan_tcp_timewait_assassination", return_value=None)
     @patch("hardaudit.scan_locally_sourced_ipv4_interfaces", return_value=[])
     @patch("hardaudit.scan_unsafe_ipv4_redirect_senders", return_value=[])
     @patch("hardaudit.scan_unsafe_ipv4_redirects", return_value=[])
@@ -1598,7 +1624,7 @@ class FalsePositiveRegressionTests(unittest.TestCase):
     @patch("hardaudit._capture")
     def test_allowed_port_stays_visible_without_penalty(
         self, capture, _rp, _martians, _ipv6_source, _ipv6_redirect, _accept, _send,
-        _accept_local
+        _accept_local, _rfc1337
     ):
         capture.return_value = (0, "LISTEN 0 128 0.0.0.0:3306 0.0.0.0:*\nLISTEN 0 128 *:10050 *:*")
         module = audit_network(allowed_ports={"3306"})

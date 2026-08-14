@@ -504,6 +504,16 @@ def scan_ipv6_local_router_advertisements(root="/proc/sys/net/ipv6/conf"):
     return findings
 
 
+def scan_tcp_timewait_assassination(path="/proc/sys/net/ipv4/tcp_rfc1337"):
+    """Retourne 0 lorsque les RST peuvent supprimer prématurément TIME-WAIT."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    return value if value == 0 else None
+
+
 def audit_network(allowed_ports=None):
     m = Module("Reseau & Ports", 12, "CIS 3.x")
     allowed_ports = {str(port) for port in (allowed_ports or set())}
@@ -647,6 +657,17 @@ def audit_network(allowed_ports=None):
                 f"Interfaces concernees : {interfaces}. Linux refuse normalement une RA dont l'adresse source appartient deja a la machine pour eviter une boucle reseau involontaire ; conserver accept_ra_from_local=1 uniquement pour un montage documente.",
                 "LOW",
                 verify="grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_ra,accept_ra_from_local,forwarding} 2>/dev/null",
+            )
+
+        # Le chemin effectif du kernel supprime l'etat TIME-WAIT sur un RST
+        # en fenetre lorsque tcp_rfc1337=0. Le mode 1 ignore ce RST, comme le
+        # correctif F1 du RFC 1337, afin que les anciens segments expirent.
+        if scan_tcp_timewait_assassination() == 0:
+            m.add(
+                "Protection TCP TIME-WAIT contre les RST desactivee",
+                "net.ipv4.tcp_rfc1337 = 0 : un RST valide peut supprimer prematurement l'etat TIME-WAIT et laisser d'anciens segments perturber une connexion reutilisant les memes adresses et ports. Le mode 1 conserve TIME-WAIT face a ce RST.",
+                "LOW",
+                verify="sysctl net.ipv4.tcp_rfc1337",
             )
     except Exception as e:
         m.add("Erreur audit reseau", str(e), "MEDIUM")

@@ -108,7 +108,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 |---|---|---|---|
 | Utilisateurs | 12 | CIS 5.x | Root accessible, UID 0 non-root, sudo sans mdp, umask |
 | SSH | 12 | CIS 5.2 / ANSSI R5 | PermitRootLogin, PasswordAuth, X11Forwarding, port |
-| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), refus des routes IPv4 imposées par la source, en-têtes de routage IPv6 type 2, journalisation des sources impossibles, routage inhabituel de `127/8`, refus des paquets usurpant une adresse IPv4 locale, redirects ICMP IPv4/IPv6, routeurs acceptant encore les annonces IPv6 (`accept_ra=2`) et RA dont la source appartient déjà à l'hôte |
+| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), refus des routes IPv4 imposées par la source, en-têtes de routage IPv6 type 2, journalisation des sources impossibles, routage inhabituel de `127/8`, refus des paquets usurpant une adresse IPv4 locale, redirects ICMP IPv4/IPv6, routeurs acceptant encore les annonces IPv6 (`accept_ra=2`), RA dont la source appartient déjà à l'hôte et protection TCP TIME-WAIT contre les RST |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
 | Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, entropie mmap et décalage aléatoire de la pile kernel à chaque syscall, ptrace, perf_events, syncookies, pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés, collecteurs pipe sans borne et chemin du helper root, répétition illimitée des oops kernel, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
@@ -193,6 +193,9 @@ grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_ra,forwarding} 2>/dev/null
 
 # RA portant une adresse source déjà locale (0 = refus anti-boucle, 1 = acceptation)
 grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_ra,accept_ra_from_local,forwarding} 2>/dev/null
+
+# Protection RFC 1337 : 1 empêche un RST de supprimer prématurément l'état TCP TIME-WAIT
+sysctl net.ipv4.tcp_rfc1337
 
 # Processus utilisant encore un ancien binaire après mise à jour
 sudo ls -l /proc/PID/exe
@@ -366,6 +369,8 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 > **Faux positif Router Advertisement :** `accept_ra=2` est volontaire sur certains routeurs qui doivent apprendre leur route amont par IPv6 tout en transférant les paquets. HardAudit ne signale que ce couple avec `forwarding=1` ; valider l'architecture avant de revenir à `0` ou `1`.
 
 > **Faux positif RA à source locale :** `accept_ra_from_local=1` peut être requis par un laboratoire ou un montage réseau volontairement bouclé. HardAudit ne le signale que si l'interface accepte fonctionnellement les RA ; la valeur `1` prouve une exception anti-boucle, pas une attaque. Vérifier la topologie avant de la désactiver.
+
+> **Faux positif TCP RFC 1337 :** le mode `1` ignore les RST reçus en état TIME-WAIT afin que les anciens segments expirent, mais s'écarte du comportement Linux historique par défaut. Le finding `LOW` signale une réduction de robustesse lors de la réutilisation rapide des mêmes adresses et ports, pas une attaque active.
 
 > **Faux positif memfd :** des runtimes, navigateurs ou moteurs JIT peuvent légitimement exécuter du code depuis un memfd. Le mode `1` conserve cette possibilité avec `MFD_EXEC` explicite ; le mode `2` la bloque et doit être testé avec les applications avant déploiement.
 
