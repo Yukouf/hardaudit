@@ -925,6 +925,32 @@ def scan_unsafe_core_pipe_helper(core_pattern_path="/proc/sys/kernel/core_patter
     return None
 
 
+def scan_unsafe_module_helper(path="/proc/sys/kernel/modprobe"):
+    """Retourne le premier composant non-root ou inscriptible du helper modprobe."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            helper = f.read().strip()
+    except OSError:
+        return None
+    # Une valeur vide desactive completement l'autoload selon la documentation
+    # du kernel. Une valeur non absolue ne peut pas designer le helper attendu.
+    if not helper or not os.path.isabs(helper):
+        return None
+
+    resolved = os.path.realpath(helper)
+    current = "/"
+    for component in resolved.strip("/").split("/"):
+        current = os.path.join(current, component)
+        try:
+            info = os.stat(current)
+        except OSError:
+            return None
+        mode = stat.S_IMODE(info.st_mode)
+        if info.st_uid != 0 or mode & 0o022:
+            return helper, current, mode, info.st_uid, info.st_gid
+    return None
+
+
 def scan_unprivileged_bpf(path="/proc/sys/kernel/unprivileged_bpf_disabled"):
     """Retourne 0 si les appels BPF non privilegies sont autorises."""
     try:
@@ -1403,6 +1429,16 @@ def audit_kernel():
             f"kernel.core_pattern lance {helper}, mais {component} a les droits {mode:04o} et appartient a UID {uid}, GID {gid}. Le kernel execute ce helper avec les credentials root dans les namespaces initiaux : verrouiller tout son chemin a root.",
             "CRITICAL",
             verify="sysctl kernel.core_pattern; namei -l $(sysctl -n kernel.core_pattern | sed -n 's/^|[[:space:]]*\\([^[:space:]]*\\).*/\\1/p')",
+        )
+
+    unsafe_module_helper = scan_unsafe_module_helper()
+    if unsafe_module_helper is not None:
+        helper, component, mode, uid, gid = unsafe_module_helper
+        m.add(
+            "Helper d'autoload de modules modifiable hors de root",
+            f"kernel.modprobe designe {helper}, mais {component} a les droits {mode:04o} et appartient a UID {uid}, GID {gid}. Le kernel peut executer ce helper avec les credentials root lorsqu'il demande un module : verrouiller tout son chemin a root.",
+            "CRITICAL",
+            verify="sysctl kernel.modprobe; namei -l $(sysctl -n kernel.modprobe)",
         )
 
     # Continuer apres un oops peut laisser des ressources ou verrous dans un

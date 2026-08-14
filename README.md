@@ -111,7 +111,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 | Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), refus des routes IPv4 imposées par la source, en-têtes de routage IPv6 type 2, journalisation des sources impossibles, routage inhabituel de `127/8`, refus des paquets usurpant une adresse IPv4 locale, redirects ICMP IPv4/IPv6, routeurs acceptant encore les annonces IPv6 (`accept_ra=2`), RA dont la source appartient déjà à l'hôte, protection TCP TIME-WAIT contre les RST et refus des requêtes ICMP broadcast/multicast |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
-| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, entropie mmap et décalage aléatoire de la pile kernel à chaque syscall, ptrace, perf_events, syncookies, pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés, collecteurs pipe sans borne et chemin du helper root, répétition illimitée des oops kernel, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
+| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, entropie mmap et décalage aléatoire de la pile kernel à chaque syscall, ptrace, perf_events, syncookies, pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés, collecteurs pipe sans borne et chemin du helper root, chemin du helper `kernel.modprobe`, répétition illimitée des oops kernel, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
 | Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires et bibliothèques supprimés encore exécutables en mémoire |
 | Filesystem | 10 | CIS 1.1 / ANSSI R28 | `/tmp` exécutable, cloisonnement `nodev,nosuid,noexec` de `/dev/shm`, world-writable, sticky bit, shadow, visibilité inter-utilisateurs de `/proc` |
 | Logs | 8 | CIS 4.x | auditd, rsyslog, logrotate |
@@ -229,6 +229,10 @@ ulimit -c
 # Un helper pipe tourne avec les credentials root : tout son chemin doit être maîtrisé par root
 namei -l $(sysctl -n kernel.core_pattern | sed -n 's/^|[[:space:]]*\([^[:space:]]*\).*/\1/p')
 
+# Le kernel peut lancer automatiquement le helper de modules : tout son chemin doit être maîtrisé par root
+sysctl kernel.modprobe
+namei -l $(sysctl -n kernel.modprobe)
+
 # Oops kernel : oops_limit=0 désactive le compteur ; une valeur positive borne les répétitions
 sysctl kernel.panic_on_oops kernel.oops_limit
 
@@ -342,6 +346,8 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 > **Faux positif core_pipe_limit :** une valeur `0` n'est signalée que si `core_pattern` lance réellement un helper avec `|`. Une borne positive limite le nombre de collecteurs concurrents mais peut faire sauter des dumps lors d'une vague de crash ; dimensionner selon la capacité et les besoins de diagnostic.
 
 > **Faux positif helper de core dump :** HardAudit suit les liens symboliques et vérifie chaque composant du chemin résolu. Un répertoire ou exécutable non possédé par root, ou inscriptible par groupe/autres, est critique car le kernel lance le helper avec les credentials root dans les namespaces initiaux. Une délégation volontaire doit éviter toute modification de ce chemin privilégié.
+
+> **Faux positif helper modprobe :** un wrapper d'observabilité peut remplacer `/sbin/modprobe`, mais le kernel l'exécute automatiquement lorsqu'il demande un module. HardAudit accepte tout chemin absolu dont chaque composant résolu appartient à root et n'est inscriptible ni par le groupe ni par les autres ; une valeur vide, qui désactive l'autoload, est également acceptée.
 
 > **Faux positif oops_limit :** `panic_on_oops=1` arrête immédiatement la machine au premier oops, ce qui peut transformer un bug en indisponibilité. HardAudit ne l'exige pas : il signale uniquement le couple `panic_on_oops=0` et `oops_limit=0`, qui désactive toute borne liée au nombre d'oops. Une valeur positive conserve une marge de diagnostic tout en limitant les répétitions.
 

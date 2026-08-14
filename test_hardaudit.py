@@ -881,6 +881,50 @@ class CorePipeHelperPermissionsTests(unittest.TestCase):
             self.assertTrue(uid != 0 or mode & 0o022)
 
 
+class ModuleAutoloadHelperTests(unittest.TestCase):
+    def _policy(self, value):
+        policy = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        policy.write(value + "\n")
+        policy.flush()
+        return policy
+
+    def test_world_writable_modprobe_helper_is_reported(self):
+        with tempfile.TemporaryDirectory(dir="/root") as root:
+            helper = os.path.join(root, "modprobe-helper")
+            with open(helper, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\n")
+            os.chmod(helper, 0o777)
+            with self._policy(helper) as policy:
+                result = hardaudit.scan_unsafe_module_helper(policy.name)
+            self.assertEqual(result[:3], (helper, helper, 0o777))
+
+        with patch(
+            "hardaudit.scan_unsafe_module_helper",
+            return_value=("/opt/helper", "/opt/helper", 0o777, 0, 0),
+        ):
+            findings = [f for f in audit_kernel().findings if "autoload de modules" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "CRITICAL")
+        self.assertIn("credentials root", findings[0].detail)
+
+    def test_representative_root_owned_helper_and_disabled_autoload_pass(self):
+        with tempfile.TemporaryDirectory(dir="/root") as root:
+            helper = os.path.join(root, "modprobe-helper")
+            with open(helper, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\n")
+            os.chmod(helper, 0o755)
+            with self._policy(helper) as policy:
+                self.assertIsNone(hardaudit.scan_unsafe_module_helper(policy.name))
+        with self._policy("") as policy:
+            self.assertIsNone(hardaudit.scan_unsafe_module_helper(policy.name))
+
+    def test_live_modprobe_path_is_exercised_read_only(self):
+        result = hardaudit.scan_unsafe_module_helper()
+        if result is not None:
+            _, _, mode, uid, _ = result
+            self.assertTrue(uid != 0 or mode & 0o022)
+
+
 class UnprivilegedBpfTests(unittest.TestCase):
     def test_enabled_unprivileged_bpf_is_reported(self):
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
