@@ -1394,6 +1394,30 @@ class KernelStackOffsetRandomizationTests(unittest.TestCase):
 
 
 class KernelSysctlSemanticsTests(unittest.TestCase):
+    def test_broadcast_echo_responses_are_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
+            policy.write("0\n")
+            policy.flush()
+            self.assertEqual(hardaudit.scan_broadcast_icmp_echo_enabled(policy.name), 0)
+
+        with patch("hardaudit.scan_broadcast_icmp_echo_enabled", return_value=0):
+            findings = [
+                finding for finding in audit_network().findings
+                if "broadcast" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "MEDIUM")
+        self.assertIn("amplification", findings[0].detail)
+
+    def test_broadcast_echo_ignore_and_live_policy_are_exercised_read_only(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
+            policy.write("1\n")
+            policy.flush()
+            self.assertIsNone(hardaudit.scan_broadcast_icmp_echo_enabled(policy.name))
+
+        live = hardaudit.scan_broadcast_icmp_echo_enabled()
+        self.assertIn(live, (None, 0))
+
     def test_disabled_rfc1337_protection_is_reported(self):
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
             policy.write("0\n")

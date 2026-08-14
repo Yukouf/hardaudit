@@ -514,6 +514,18 @@ def scan_tcp_timewait_assassination(path="/proc/sys/net/ipv4/tcp_rfc1337"):
     return value if value == 0 else None
 
 
+def scan_broadcast_icmp_echo_enabled(
+    path="/proc/sys/net/ipv4/icmp_echo_ignore_broadcasts",
+):
+    """Retourne 0 si Linux répond aux requêtes ICMP broadcast/multicast."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    return value if value == 0 else None
+
+
 def audit_network(allowed_ports=None):
     m = Module("Reseau & Ports", 12, "CIS 3.x")
     allowed_ports = {str(port) for port in (allowed_ports or set())}
@@ -668,6 +680,17 @@ def audit_network(allowed_ports=None):
                 "net.ipv4.tcp_rfc1337 = 0 : un RST valide peut supprimer prematurement l'etat TIME-WAIT et laisser d'anciens segments perturber une connexion reutilisant les memes adresses et ports. Le mode 1 conserve TIME-WAIT face a ce RST.",
                 "LOW",
                 verify="sysctl net.ipv4.tcp_rfc1337",
+            )
+
+        # La documentation kernel confirme que le mode 1 ignore les requêtes
+        # ECHO et TIMESTAMP reçues via broadcast ou multicast. Le mode 0 peut
+        # donc faire participer l'hôte à une amplification ICMP locale.
+        if scan_broadcast_icmp_echo_enabled() == 0:
+            m.add(
+                "Reponses ICMP aux adresses broadcast/multicast actives",
+                "net.ipv4.icmp_echo_ignore_broadcasts = 0 : Linux repond aux requetes ECHO et TIMESTAMP envoyees en broadcast ou multicast. Une source usurpee peut alors transformer les hotes du segment en amplification vers une victime ; conserver la valeur 1 sauf besoin de diagnostic exceptionnel.",
+                "MEDIUM",
+                verify="sysctl net.ipv4.icmp_echo_ignore_broadcasts",
             )
     except Exception as e:
         m.add("Erreur audit reseau", str(e), "MEDIUM")
