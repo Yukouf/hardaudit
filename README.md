@@ -111,7 +111,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 | Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), refus des routes IPv4 imposées par la source, en-têtes de routage IPv6 type 2, journalisation des sources impossibles, routage inhabituel de `127/8`, refus des paquets usurpant une adresse IPv4 locale, redirects ICMP IPv4/IPv6, routeurs acceptant encore les annonces IPv6 (`accept_ra=2`), RA dont la source appartient déjà à l'hôte, protection TCP TIME-WAIT contre les RST et refus des requêtes ICMP broadcast/multicast |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
-| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, entropie mmap et décalage aléatoire de la pile kernel à chaque syscall, ptrace, perf_events, syncookies, pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés, collecteurs pipe sans borne et chemin du helper root, chemin du helper `kernel.modprobe`, répétition illimitée des oops kernel, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
+| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, entropie mmap et décalage aléatoire de la pile kernel à chaque syscall, ptrace, perf_events, syncookies, pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés, collecteurs pipe sans borne et chemin du helper root, chemins des helpers privilégiés `kernel.modprobe` et `kernel.hotplug`, répétition illimitée des oops kernel, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
 | Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires et bibliothèques supprimés encore exécutables en mémoire |
 | Filesystem | 10 | CIS 1.1 / ANSSI R28 | `/tmp` exécutable, cloisonnement `nodev,nosuid,noexec` de `/dev/shm`, world-writable, sticky bit, shadow, visibilité inter-utilisateurs de `/proc` |
 | Logs | 8 | CIS 4.x | auditd, rsyslog, logrotate |
@@ -233,6 +233,10 @@ namei -l $(sysctl -n kernel.core_pattern | sed -n 's/^|[[:space:]]*\([^[:space:]
 sysctl kernel.modprobe
 namei -l $(sysctl -n kernel.modprobe)
 
+# L'ancien helper hotplug lance potentiellement un processus privilégié par uevent ; vide = désactivé
+sysctl kernel.hotplug
+helper=$(sysctl -n kernel.hotplug); [ -z "$helper" ] || namei -l "$helper"
+
 # Oops kernel : oops_limit=0 désactive le compteur ; une valeur positive borne les répétitions
 sysctl kernel.panic_on_oops kernel.oops_limit
 
@@ -320,6 +324,8 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 > **Faux positif kexec :** conserver `kernel.kexec_load_disabled=0` est légitime sur un hôte utilisant `kexec` ou `kdump`. Les limites `kexec_load_limit_reboot` et `kexec_load_limit_panic` permettent alors de borner séparément les chargements normaux et de crash, mais ne peuvent être rendues que plus restrictives ; dimensionner les valeurs selon les redémarrages et crash dumps attendus. Ne jamais passer le verrou global à `1` avant d'avoir vérifié ces usages : il ne peut plus être annulé avant un redémarrage.
 
 > **Faux positif modules :** conserver `kernel.modules_disabled=0` est normal sur une machine qui utilise le hotplug, DKMS ou charge encore des pilotes après le démarrage. La valeur `1` vise surtout les appliances stables ; elle bloque aussi le retrait des modules et ne peut plus être annulée avant un redémarrage.
+
+> **Faux positif helper hotplug :** un helper `kernel.hotplug` non vide peut rester nécessaire sur un système embarqué ancien. Sur un Linux moderne, les uevents passent normalement par netlink : vider ce chemin retire une exécution privilégiée par événement. Si le helper est indispensable, tout son chemin doit appartenir à root et rester non inscriptible par groupe/autres.
 
 > **Faux positif Lockdown :** le mode `none` est courant sur une VM sans Secure Boot et n'indique pas une compromission. `integrity` ou `confidentiality` est surtout pertinent pour une chaîne de démarrage maîtrisée ; tester auparavant les modules, kexec et outils de diagnostic qui peuvent être bloqués.
 

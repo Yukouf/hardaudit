@@ -951,6 +951,36 @@ def scan_unsafe_module_helper(path="/proc/sys/kernel/modprobe"):
     return None
 
 
+def scan_enabled_hotplug_helper(path="/proc/sys/kernel/hotplug"):
+    """Retourne le helper uevent actif et son premier composant de chemin faible.
+
+    Une valeur vide desactive l'ancien helper lance pour chaque uevent. Un
+    chemin actif reste visible meme s'il est correctement protege, car les
+    kernels modernes utilisent normalement le canal netlink.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            helper = f.read().strip()
+    except OSError:
+        return None
+    if not helper:
+        return None
+
+    if os.path.isabs(helper):
+        resolved = os.path.realpath(helper)
+        current = "/"
+        for component in resolved.strip("/").split("/"):
+            current = os.path.join(current, component)
+            try:
+                info = os.stat(current)
+            except OSError:
+                break
+            mode = stat.S_IMODE(info.st_mode)
+            if info.st_uid != 0 or mode & 0o022:
+                return helper, current, mode, info.st_uid, info.st_gid
+    return helper, None, None, None, None
+
+
 def scan_unprivileged_bpf(path="/proc/sys/kernel/unprivileged_bpf_disabled"):
     """Retourne 0 si les appels BPF non privilegies sont autorises."""
     try:
@@ -1439,6 +1469,37 @@ def audit_kernel():
             f"kernel.modprobe designe {helper}, mais {component} a les droits {mode:04o} et appartient a UID {uid}, GID {gid}. Le kernel peut executer ce helper avec les credentials root lorsqu'il demande un module : verrouiller tout son chemin a root.",
             "CRITICAL",
             verify="sysctl kernel.modprobe; namei -l $(sysctl -n kernel.modprobe)",
+        )
+
+    # CONFIG_UEVENT_HELPER permet au kernel de lancer ce programme pour chaque
+    # evenement de peripherique. Les systemes modernes utilisent netlink et une
+    # valeur vide ; un chemin actif ajoute donc une execution privilegiee et un
+    # risque de tempete de processus, surtout si son chemin est modifiable.
+    hotplug_helper = scan_enabled_hotplug_helper()
+    if hotplug_helper is not None:
+        helper, component, mode, uid, gid = hotplug_helper
+        if component is not None:
+            title = "Helper hotplug privilegie modifiable hors de root"
+            detail = (
+                f"kernel.hotplug designe {helper}, mais {component} a les droits "
+                f"{mode:04o} et appartient a UID {uid}, GID {gid}. Chaque uevent peut "
+                "alors lancer un programme substituable avec les credentials du kernel ; "
+                "vider kernel.hotplug ou verrouiller tout le chemin a root."
+            )
+            severity = "CRITICAL"
+        else:
+            title = "Ancien helper hotplug kernel actif"
+            detail = (
+                f"kernel.hotplug designe {helper}. Le kernel peut lancer un processus "
+                "pour chaque uevent alors que les systemes modernes utilisent netlink ; "
+                "vider ce reglage sauf dependance embarquee explicitement verifiee."
+            )
+            severity = "LOW"
+        m.add(
+            title,
+            detail,
+            severity,
+            verify="sysctl kernel.hotplug; helper=$(sysctl -n kernel.hotplug); [ -z \"$helper\" ] || namei -l \"$helper\"",
         )
 
     # Continuer apres un oops peut laisser des ressources ou verrous dans un

@@ -925,6 +925,52 @@ class ModuleAutoloadHelperTests(unittest.TestCase):
             self.assertTrue(uid != 0 or mode & 0o022)
 
 
+class HotplugHelperTests(unittest.TestCase):
+    def _policy(self, value):
+        policy = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        policy.write(value + "\n")
+        policy.flush()
+        return policy
+
+    def test_world_writable_hotplug_helper_is_critical(self):
+        with tempfile.TemporaryDirectory(dir="/root") as root:
+            helper = os.path.join(root, "hotplug-helper")
+            with open(helper, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\n")
+            os.chmod(helper, 0o777)
+            with self._policy(helper) as policy:
+                result = hardaudit.scan_enabled_hotplug_helper(policy.name)
+            self.assertEqual(result[:3], (helper, helper, 0o777))
+
+        weak = ("/opt/hotplug", "/opt/hotplug", 0o777, 0, 0)
+        with patch("hardaudit.scan_enabled_hotplug_helper", return_value=weak):
+            findings = [f for f in audit_kernel().findings if "hotplug" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "CRITICAL")
+        self.assertIn("Chaque uevent", findings[0].detail)
+
+    def test_representative_empty_policy_disables_legacy_helper(self):
+        with self._policy("") as policy:
+            self.assertIsNone(hardaudit.scan_enabled_hotplug_helper(policy.name))
+
+    def test_root_owned_active_helper_remains_visible_as_legacy_surface(self):
+        with tempfile.TemporaryDirectory(dir="/root") as root:
+            helper = os.path.join(root, "hotplug-helper")
+            with open(helper, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\n")
+            os.chmod(helper, 0o755)
+            with self._policy(helper) as policy:
+                self.assertEqual(
+                    hardaudit.scan_enabled_hotplug_helper(policy.name),
+                    (helper, None, None, None, None),
+                )
+
+    def test_live_hotplug_policy_is_exercised_read_only(self):
+        result = hardaudit.scan_enabled_hotplug_helper()
+        if result is not None:
+            self.assertTrue(result[0])
+
+
 class UnprivilegedBpfTests(unittest.TestCase):
     def test_enabled_unprivileged_bpf_is_reported(self):
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysctl:
