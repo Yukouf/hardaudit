@@ -108,7 +108,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 |---|---|---|---|
 | Utilisateurs | 12 | CIS 5.x | Root accessible, UID 0 non-root, sudo sans mdp, umask |
 | SSH | 12 | CIS 5.2 / ANSSI R5 | PermitRootLogin, PasswordAuth, X11Forwarding, port |
-| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), refus des routes IPv4 imposées par la source, en-têtes de routage IPv6 type 2, journalisation des sources impossibles, routage inhabituel de `127/8`, redirects ICMP IPv4/IPv6 et routeurs acceptant encore les annonces IPv6 (`accept_ra=2`) |
+| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), refus des routes IPv4 imposées par la source, en-têtes de routage IPv6 type 2, journalisation des sources impossibles, routage inhabituel de `127/8`, refus des paquets usurpant une adresse IPv4 locale, redirects ICMP IPv4/IPv6 et routeurs acceptant encore les annonces IPv6 (`accept_ra=2`) |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
 | Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR et entropie mmap comparée au maximum compilé, ptrace, perf_events, syncookies, pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés, collecteurs pipe sans borne et chemin du helper root, répétition illimitée des oops kernel, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
@@ -174,6 +174,10 @@ journalctl -k | grep -i martian
 # Routage des adresses loopback 127/8 hors de l'hôte (1 = autorisé)
 grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/route_localnet 2>/dev/null
 sudo nft list ruleset
+
+# Paquets reçus avec une adresse source locale : "all=1" OU la valeur locale les accepte
+grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/accept_local 2>/dev/null
+ip route show table all
 
 # Redirects ICMP IPv4 : la règle effective dépend aussi du mode hôte/routeur de chaque interface
 grep -H . /proc/sys/net/ipv4/conf/{all,default,*/}{accept_redirects,forwarding} 2>/dev/null
@@ -330,6 +334,8 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 > **Faux positif log_martians :** ce réglage améliore la visibilité mais ne remplace ni `rp_filter` ni un firewall. Sur un réseau bruité ou volontairement asymétrique, il peut remplir les journaux ; dimensionner la rotation et corriger les routes légitimes avant de l'activer partout.
 
 > **Faux positif route_localnet :** les proxies transparents et certaines publications de ports conteneurisés utilisent volontairement le routage de `127/8`. La valeur `all=1` **ou** celle d'une interface à `1` suffit ; vérifier les règles NAT avant de désactiver ce mode. Le finding signale que la barrière loopback est retirée, pas qu'un service est déjà exposé.
+
+> **Faux positif accept_local :** certains routeurs asymétriques font sortir un paquet par une interface puis le réinjectent par une autre avec une adresse source locale. Linux accepte ce trafic si `conf/all/accept_local=1` **ou** si l'interface le permet ; HardAudit le signale car ce réglage retire un contrôle anti-usurpation, mais il peut être volontaire dans une topologie documentée.
 
 > **Faux positif redirects ICMP :** un routeur administré peut utiliser volontairement les redirects. HardAudit calcule la règle documentée par le kernel par interface : en mode hôte, `all=1` **ou** `interface=1` suffit ; avec le forwarding actif, les deux doivent valoir `1`. Le finding prouve l'acceptation locale, pas une attaque en cours.
 

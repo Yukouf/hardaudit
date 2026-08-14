@@ -29,6 +29,7 @@ from hardaudit import (
     scan_fs_link_protections,
     scan_mount_options,
     scan_unlogged_martian_interfaces,
+    scan_locally_sourced_ipv4_interfaces,
     scan_proc_hidepid,
     scan_routed_loopback_interfaces,
     scan_unsafe_ipv4_source_routing,
@@ -256,6 +257,52 @@ class RoutedLoopbackTests(unittest.TestCase):
         if not os.path.exists(os.path.join(root, "all", "route_localnet")):
             self.skipTest("route_localnet is not exposed by this kernel")
         findings = scan_routed_loopback_interfaces(root)
+        self.assertTrue(all(all_value == 1 or local_value == 1
+                            for _, all_value, local_value in findings))
+
+
+class AcceptLocalIPv4Tests(unittest.TestCase):
+    def _write_value(self, root, interface, value):
+        interface_dir = os.path.join(root, interface)
+        os.makedirs(interface_dir, exist_ok=True)
+        with open(os.path.join(interface_dir, "accept_local"), "w", encoding="utf-8") as f:
+            f.write(f"{value}\n")
+
+    def test_global_or_interface_value_accepts_locally_sourced_packets(self):
+        with tempfile.TemporaryDirectory() as root:
+            for interface, value in (
+                ("all", 0), ("default", 1), ("lo", 1),
+                ("eth0", 1), ("eth1", 0),
+            ):
+                self._write_value(root, interface, value)
+            self.assertEqual(
+                scan_locally_sourced_ipv4_interfaces(root),
+                [("eth0", 0, 1)],
+            )
+
+            self._write_value(root, "all", 1)
+            self.assertEqual(
+                scan_locally_sourced_ipv4_interfaces(root),
+                [("eth0", 1, 1), ("eth1", 1, 0)],
+            )
+
+        with patch(
+            "hardaudit.scan_locally_sourced_ipv4_interfaces",
+            return_value=[("eth0", 0, 1)],
+        ):
+            findings = [
+                finding for finding in audit_network().findings
+                if "source ipv4 locale" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "MEDIUM")
+        self.assertIn("eth0", findings[0].detail)
+
+    def test_live_policy_is_exercised_read_only(self):
+        root = "/proc/sys/net/ipv4/conf"
+        if not os.path.exists(os.path.join(root, "all", "accept_local")):
+            self.skipTest("accept_local is not exposed by this kernel")
+        findings = scan_locally_sourced_ipv4_interfaces(root)
         self.assertTrue(all(all_value == 1 or local_value == 1
                             for _, all_value, local_value in findings))
 
@@ -1333,6 +1380,7 @@ class FalsePositiveRegressionTests(unittest.TestCase):
     def test_info_finding_has_no_score_penalty(self):
         self.assertEqual(Finding("Contexte", "Attendu", "INFO").penalty, 0)
 
+    @patch("hardaudit.scan_locally_sourced_ipv4_interfaces", return_value=[])
     @patch("hardaudit.scan_unsafe_ipv4_redirect_senders", return_value=[])
     @patch("hardaudit.scan_unsafe_ipv4_redirects", return_value=[])
     @patch("hardaudit.scan_unsafe_ipv6_redirects", return_value=[])
@@ -1341,7 +1389,8 @@ class FalsePositiveRegressionTests(unittest.TestCase):
     @patch("hardaudit.scan_unprotected_reverse_paths", return_value=[])
     @patch("hardaudit._capture")
     def test_allowed_port_stays_visible_without_penalty(
-        self, capture, _rp, _martians, _ipv6_source, _ipv6_redirect, _accept, _send
+        self, capture, _rp, _martians, _ipv6_source, _ipv6_redirect, _accept, _send,
+        _accept_local
     ):
         capture.return_value = (0, "LISTEN 0 128 0.0.0.0:3306 0.0.0.0:*\nLISTEN 0 128 *:10050 *:*")
         module = audit_network(allowed_ports={"3306"})

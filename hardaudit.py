@@ -335,6 +335,31 @@ def scan_routed_loopback_interfaces(root="/proc/sys/net/ipv4/conf"):
     return findings
 
 
+def scan_locally_sourced_ipv4_interfaces(root="/proc/sys/net/ipv4/conf"):
+    """Liste les interfaces acceptant des paquets dont la source est locale."""
+    try:
+        with open(os.path.join(root, "all", "accept_local"), encoding="utf-8") as f:
+            all_value = int(f.read().strip())
+        interfaces = os.listdir(root)
+    except (OSError, ValueError):
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            with open(os.path.join(root, interface, "accept_local"), encoding="utf-8") as f:
+                interface_value = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        # IN_DEV_ACCEPT_LOCAL utilise IN_DEV_ORCONF : la politique globale OU
+        # celle de l'interface suffit à accepter une adresse source locale.
+        if all_value == 1 or interface_value == 1:
+            findings.append((interface, all_value, interface_value))
+    return findings
+
+
 def scan_unsafe_ipv4_redirects(root="/proc/sys/net/ipv4/conf"):
     """Liste les interfaces qui acceptent effectivement les redirects ICMP IPv4."""
     try:
@@ -526,6 +551,16 @@ def audit_network(allowed_ports=None):
                 f"route_localnet autorise effectivement 127/8 sur : {interfaces}. Ce mode sert aux proxies transparents et a certaines redirections NAT, mais retire la protection qui traite normalement ces adresses comme impossibles sur le reseau.",
                 "MEDIUM",
                 verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/route_localnet 2>/dev/null; sudo nft list ruleset; sudo iptables-save",
+            )
+
+        locally_sourced = scan_locally_sourced_ipv4_interfaces()
+        if locally_sourced:
+            interfaces = ", ".join(item[0] for item in locally_sourced)
+            m.add(
+                "Paquets a source IPv4 locale acceptes depuis le reseau",
+                f"accept_local est effectif sur : {interfaces}. Un paquet recu peut usurper une adresse que l'hote considere locale ; ce mode sert a certains routages asymetriques, mais doit rester desactive sans besoin documente.",
+                "MEDIUM",
+                verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/accept_local 2>/dev/null; ip route show table all",
             )
 
         redirect_findings = scan_unsafe_ipv4_redirects()
