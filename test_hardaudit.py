@@ -41,6 +41,7 @@ from hardaudit import (
     scan_unsafe_ipv4_redirects,
     scan_unsafe_ipv6_redirects,
     scan_ipv6_routers_accepting_ra,
+    scan_ipv6_local_router_advertisements,
     scan_unprotected_reverse_paths,
     scan_unsafe_suid_dumps,
     scan_unbounded_core_pipe,
@@ -667,6 +668,57 @@ class IPv6RouterAdvertisementTests(unittest.TestCase):
         findings = scan_ipv6_routers_accepting_ra(root)
         self.assertTrue(all(accept_ra == 2 and forwarding == 1
                             for _, accept_ra, forwarding in findings))
+
+
+class IPv6LocalRouterAdvertisementTests(unittest.TestCase):
+    def _write_interface(self, root, interface, accept_ra, forwarding, accept_from_local):
+        interface_dir = os.path.join(root, interface)
+        os.makedirs(interface_dir)
+        for name, value in (
+            ("accept_ra", accept_ra),
+            ("forwarding", forwarding),
+            ("accept_ra_from_local", accept_from_local),
+        ):
+            with open(os.path.join(interface_dir, name), "w", encoding="utf-8") as f:
+                f.write(f"{value}\n")
+
+    def test_reports_only_interfaces_that_accept_ra_from_a_local_address(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_interface(root, "all", 1, 0, 1)
+            self._write_interface(root, "default", 1, 0, 1)
+            self._write_interface(root, "eth0", 1, 0, 1)
+            self._write_interface(root, "eth1", 1, 0, 0)
+            self._write_interface(root, "eth2", 1, 1, 1)
+            self._write_interface(root, "eth3", 2, 1, 1)
+            self._write_interface(root, "lo", 1, 0, 1)
+            self.assertEqual(
+                scan_ipv6_local_router_advertisements(root),
+                [("eth0", 1, 0, 1), ("eth3", 2, 1, 1)],
+            )
+
+    def test_network_audit_reports_local_source_ra_acceptance(self):
+        with patch(
+            "hardaudit.scan_ipv6_local_router_advertisements",
+            return_value=[("eth0", 1, 0, 1)],
+        ), patch("hardaudit.scan_ipv6_routers_accepting_ra", return_value=[]):
+            findings = [
+                finding for finding in audit_network().findings
+                if "source locale" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("boucle", findings[0].detail)
+
+    def test_live_policy_is_exercised_read_only(self):
+        root = "/proc/sys/net/ipv6/conf"
+        if not os.path.exists(os.path.join(root, "all", "accept_ra_from_local")):
+            self.skipTest("accept_ra_from_local is not exposed by this kernel")
+        findings = scan_ipv6_local_router_advertisements(root)
+        self.assertTrue(all(
+            accept_from_local == 1
+            and (accept_ra == 2 or (accept_ra == 1 and forwarding == 0))
+            for _, accept_ra, forwarding, accept_from_local in findings
+        ))
 
 
 class IcmpRedirectSenderTests(unittest.TestCase):

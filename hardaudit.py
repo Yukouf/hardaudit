@@ -476,6 +476,34 @@ def scan_ipv6_routers_accepting_ra(root="/proc/sys/net/ipv6/conf"):
     return findings
 
 
+def scan_ipv6_local_router_advertisements(root="/proc/sys/net/ipv6/conf"):
+    """Liste les interfaces acceptant une RA dont la source est locale."""
+    try:
+        interfaces = os.listdir(root)
+    except OSError:
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            values = []
+            for name in ("accept_ra", "forwarding", "accept_ra_from_local"):
+                with open(os.path.join(root, interface, name), encoding="utf-8") as f:
+                    values.append(int(f.read().strip()))
+        except (OSError, ValueError):
+            continue
+
+        accept_ra, forwarding, accept_from_local = values
+        # accept_ra=1 n'est fonctionnel qu'en mode hote ; le mode 2 force
+        # l'acceptation meme sur un routeur. Ce reglage est propre a l'interface.
+        ra_enabled = accept_ra == 2 or (accept_ra == 1 and forwarding == 0)
+        if accept_from_local == 1 and ra_enabled:
+            findings.append((interface, accept_ra, forwarding, accept_from_local))
+    return findings
+
+
 def audit_network(allowed_ports=None):
     m = Module("Reseau & Ports", 12, "CIS 3.x")
     allowed_ports = {str(port) for port in (allowed_ports or set())}
@@ -594,13 +622,31 @@ def audit_network(allowed_ports=None):
             )
 
         ipv6_routers_accepting_ra = scan_ipv6_routers_accepting_ra()
+        ipv6_local_ra = scan_ipv6_local_router_advertisements()
         if ipv6_routers_accepting_ra:
             interfaces = ", ".join(item[0] for item in ipv6_routers_accepting_ra)
+            local_sources = {item[0] for item in ipv6_local_ra}
+            overlap = sorted({item[0] for item in ipv6_routers_accepting_ra} & local_sources)
+            local_note = (
+                f" accept_ra_from_local=1 accepte aussi une source appartenant a la machine sur : {', '.join(overlap)}."
+                if overlap else ""
+            )
             m.add(
                 "Routeur acceptant les Router Advertisements IPv6",
-                f"Interfaces concernees : {interfaces}. accept_ra=2 outrepasse le mode routeur : un voisin peut encore fournir une route ou des prefixes IPv6. Garder ce mode seulement pour un routeur qui doit aussi apprendre sa connectivite par RA.",
+                f"Interfaces concernees : {interfaces}. accept_ra=2 outrepasse le mode routeur : un voisin peut encore fournir une route ou des prefixes IPv6.{local_note} Garder ce mode seulement pour un routeur qui doit aussi apprendre sa connectivite par RA.",
                 "LOW",
-                verify="grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_ra,forwarding} 2>/dev/null",
+                verify="grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_ra,accept_ra_from_local,forwarding} 2>/dev/null",
+            )
+
+        router_interfaces = {item[0] for item in ipv6_routers_accepting_ra}
+        local_only = [item for item in ipv6_local_ra if item[0] not in router_interfaces]
+        if local_only:
+            interfaces = ", ".join(item[0] for item in local_only)
+            m.add(
+                "Annonces IPv6 a source locale acceptees",
+                f"Interfaces concernees : {interfaces}. Linux refuse normalement une RA dont l'adresse source appartient deja a la machine pour eviter une boucle reseau involontaire ; conserver accept_ra_from_local=1 uniquement pour un montage documente.",
+                "LOW",
+                verify="grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_ra,accept_ra_from_local,forwarding} 2>/dev/null",
             )
     except Exception as e:
         m.add("Erreur audit reseau", str(e), "MEDIUM")
