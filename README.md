@@ -111,7 +111,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 | Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), refus des routes IPv4 imposées par la source, en-têtes de routage IPv6 type 2, journalisation des sources impossibles, routage inhabituel de `127/8`, refus des paquets usurpant une adresse IPv4 locale, redirects ICMP IPv4/IPv6 et routeurs acceptant encore les annonces IPv6 (`accept_ra=2`) |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
-| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR et entropie mmap comparée au maximum compilé, ptrace, perf_events, syncookies, pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés, collecteurs pipe sans borne et chemin du helper root, répétition illimitée des oops kernel, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
+| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, entropie mmap et décalage aléatoire de la pile kernel à chaque syscall, ptrace, perf_events, syncookies, pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés, collecteurs pipe sans borne et chemin du helper root, répétition illimitée des oops kernel, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
 | Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires et bibliothèques supprimés encore exécutables en mémoire |
 | Filesystem | 10 | CIS 1.1 / ANSSI R28 | `/tmp` exécutable, cloisonnement `nodev,nosuid,noexec` de `/dev/shm`, world-writable, sticky bit, shadow, visibilité inter-utilisateurs de `/proc` |
 | Logs | 8 | CIS 4.x | auditd, rsyslog, logrotate |
@@ -266,6 +266,10 @@ sysctl vm.mmap_min_addr
 sysctl vm.mmap_rnd_bits vm.mmap_rnd_compat_bits
 grep -E '^CONFIG_ARCH_MMAP_RND_(COMPAT_)?BITS_MAX=' /boot/config-$(uname -r)
 
+# Environ 5 bits supplémentaires de décalage de pile à chaque entrée syscall
+grep '^CONFIG_RANDOMIZE_KSTACK_OFFSET' /boot/config-$(uname -r)
+grep -o 'randomize_kstack_offset=[^ ]*' /proc/cmdline
+
 # Autoload des disciplines TTY (0 = réservé à CAP_SYS_MODULE, 1 = non privilégié)
 sysctl dev.tty.ldisc_autoload
 
@@ -308,6 +312,8 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 > **Faux positif profils AppArmor unconfined :** la valeur `0` peut être volontaire lorsqu'un profil marqué `unconfined` doit créer des namespaces utilisateur. HardAudit ne la signale que si userns et sa médiation générale sont tous deux actifs ; examiner les profils concernés avant de passer ce verrou à `1`.
 
 > **Faux positif entropie ASLR :** augmenter `mmap_rnd_bits` élargit l'espace réservé à la randomisation et peut gêner une application qui consomme un espace d'adressage virtuel exceptionnellement grand. HardAudit compare au maximum de l'architecture compilé dans le kernel, mais recommande un test applicatif avant de rendre la valeur persistante.
+
+> **Faux positif pile kernel :** ce décalage ajoute environ 5 bits d'entropie indépendamment de l'ASLR classique, avec un faible coût à chaque syscall. HardAudit ne conclut que si le support est compilé et que le défaut ou le paramètre de démarrage le désactive ; l'absence du fichier de configuration est traitée comme inconnue.
 
 > **Faux positif /dev/shm :** certains logiciels créent puis exécutent directement du code dans `/dev/shm`. `noexec` peut les casser et n'empêche pas un interpréteur de lire un script ; c'est une réduction de surface, pas une frontière absolue. Tester avant de rendre l'option persistante.
 

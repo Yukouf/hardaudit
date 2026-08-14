@@ -1161,6 +1161,42 @@ def scan_unlimited_kernel_oopses(
     return None
 
 
+def scan_disabled_kstack_offset_randomization(config_path=None, cmdline_path="/proc/cmdline"):
+    """Retourne la politique de boot si la pile kernel n'est pas randomisee."""
+    if config_path is None:
+        config_path = f"/boot/config-{os.uname().release}"
+    try:
+        with open(config_path, encoding="utf-8") as config:
+            options = {
+                line.split("=", 1)[0]: line.split("=", 1)[1].strip()
+                for line in config
+                if line.startswith("CONFIG_RANDOMIZE_KSTACK_OFFSET") and "=" in line
+            }
+        with open(cmdline_path, encoding="utf-8") as cmdline:
+            parameters = cmdline.read().split()
+    except OSError:
+        return None
+
+    # L'absence du support compile n'est pas appelee une mauvaise configuration.
+    if options.get("CONFIG_RANDOMIZE_KSTACK_OFFSET") != "y":
+        return None
+    default_enabled = options.get("CONFIG_RANDOMIZE_KSTACK_OFFSET_DEFAULT") == "y"
+
+    true_values = {"1", "y", "yes", "true", "on"}
+    false_values = {"0", "n", "no", "false", "off"}
+    override = None
+    enabled = default_enabled
+    for parameter in parameters:
+        if not parameter.startswith("randomize_kstack_offset="):
+            continue
+        value = parameter.split("=", 1)[1].lower()
+        if value in true_values:
+            enabled, override = True, value
+        elif value in false_values:
+            enabled, override = False, value
+    return None if enabled else (default_enabled, override)
+
+
 def audit_kernel():
     m = Module("Kernel & Protections", 14, "CIS 1.6 / ANSSI R14")
     checks = {
@@ -1204,6 +1240,21 @@ def audit_kernel():
             f"{name} = {current} bits, alors que ce kernel accepte {maximum}. Augmenter progressivement jusqu'au maximum apres test des applications sensibles a l'espace d'adressage.",
             "LOW",
             verify=f"cat {path}; grep '^{config_key}={maximum}$' /boot/config-$(uname -r)",
+        )
+
+    kstack_policy = scan_disabled_kstack_offset_randomization()
+    if kstack_policy is not None:
+        _, override = kstack_policy
+        reason = (
+            f"le parametre de demarrage force la valeur {override!r}"
+            if override is not None else
+            "le kernel a ete compile avec cette protection inactive par defaut"
+        )
+        m.add(
+            "Randomisation de la pile kernel desactivee",
+            f"CONFIG_RANDOMIZE_KSTACK_OFFSET est disponible, mais {reason}. Cette protection ajoute environ 5 bits d'entropie a chaque entree syscall et complique les corruptions memoire qui dependent d'adresses de pile previsibles.",
+            "LOW",
+            verify="grep '^CONFIG_RANDOMIZE_KSTACK_OFFSET' /boot/config-$(uname -r); cat /proc/cmdline",
         )
 
     unsafe_suid_dumps = scan_unsafe_suid_dumps()

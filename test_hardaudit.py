@@ -1280,6 +1280,65 @@ class BinfmtCredentialTests(unittest.TestCase):
             self.assertIn("C", flags)
 
 
+class KernelStackOffsetRandomizationTests(unittest.TestCase):
+    def _file(self, content):
+        handle = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        handle.write(content)
+        handle.flush()
+        return handle
+
+    def test_disabled_boot_policy_is_reported(self):
+        with self._file(
+            "CONFIG_RANDOMIZE_KSTACK_OFFSET=y\n"
+            "CONFIG_RANDOMIZE_KSTACK_OFFSET_DEFAULT=y\n"
+        ) as config, self._file("quiet randomize_kstack_offset=off\n") as cmdline:
+            self.assertEqual(
+                hardaudit.scan_disabled_kstack_offset_randomization(
+                    config.name, cmdline.name
+                ),
+                (True, "off"),
+            )
+
+        with patch(
+            "hardaudit.scan_disabled_kstack_offset_randomization",
+            return_value=(True, "off"),
+        ):
+            findings = [
+                finding for finding in audit_kernel().findings
+                if "pile kernel" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("5 bits", findings[0].detail)
+
+    def test_representative_enabled_default_and_boot_override_pass(self):
+        with self._file(
+            "CONFIG_RANDOMIZE_KSTACK_OFFSET=y\n"
+            "CONFIG_RANDOMIZE_KSTACK_OFFSET_DEFAULT=y\n"
+        ) as config, self._file("quiet splash\n") as cmdline:
+            self.assertIsNone(
+                hardaudit.scan_disabled_kstack_offset_randomization(
+                    config.name, cmdline.name
+                )
+            )
+
+        with self._file(
+            "CONFIG_RANDOMIZE_KSTACK_OFFSET=y\n"
+        ) as config, self._file("randomize_kstack_offset=on\n") as cmdline:
+            self.assertIsNone(
+                hardaudit.scan_disabled_kstack_offset_randomization(
+                    config.name, cmdline.name
+                )
+            )
+
+    def test_live_boot_policy_is_exercised_read_only(self):
+        result = hardaudit.scan_disabled_kstack_offset_randomization()
+        if result is not None:
+            default_enabled, override = result
+            self.assertIsInstance(default_enabled, bool)
+            self.assertIn(override, (None, "0", "n", "no", "false", "off"))
+
+
 class KernelSysctlSemanticsTests(unittest.TestCase):
     def test_aslr_entropy_below_architecture_maximum_is_reported(self):
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as bits, \
