@@ -57,6 +57,7 @@ from hardaudit import (
     scan_unrestricted_unprivileged_userns,
     scan_unconfined_userns_exception,
     scan_unlimited_kernel_oopses,
+    scan_destructive_magic_sysrq,
     scan_suboptimal_aslr_entropy,
     scan_zero_page_mappable,
     shadow_permissions_unsafe,
@@ -1460,6 +1461,34 @@ class KernelSysctlSemanticsTests(unittest.TestCase):
     def test_live_oops_policy_is_exercised_read_only(self):
         result = scan_unlimited_kernel_oopses()
         self.assertIn(result, (None, (0, 0)))
+
+    def test_magic_sysrq_reboot_bit_is_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysrq:
+            sysrq.write("176\n"); sysrq.flush()
+            self.assertEqual(
+                scan_destructive_magic_sysrq(sysrq.name),
+                (176, ["redemarrage/extinction"]),
+            )
+
+    def test_representative_recovery_only_sysrq_mask_is_accepted(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as sysrq:
+            sysrq.write("0x30\n"); sysrq.flush()
+            self.assertIsNone(scan_destructive_magic_sysrq(sysrq.name))
+
+    def test_live_magic_sysrq_policy_is_exercised_read_only(self):
+        result = scan_destructive_magic_sysrq()
+        if result is not None:
+            value, actions = result
+            self.assertIsInstance(value, int)
+            self.assertTrue(actions)
+
+    def test_magic_sysrq_finding_is_emitted_for_destructive_mask(self):
+        destructive = (192, ["signaux aux processus", "redemarrage/extinction"])
+        with patch("hardaudit.scan_destructive_magic_sysrq", return_value=destructive):
+            findings = [f for f in audit_kernel().findings if "Magic SysRq" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("192", findings[0].detail)
 
     def test_kptr_restrict_stronger_mode_is_accepted(self):
         self.assertFalse(kernel_sysctl_is_unsafe("kernel.kptr_restrict", "2"))

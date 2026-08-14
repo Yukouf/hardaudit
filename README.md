@@ -226,6 +226,11 @@ namei -l $(sysctl -n kernel.core_pattern | sed -n 's/^|[[:space:]]*\([^[:space:]
 # Oops kernel : oops_limit=0 désactive le compteur ; une valeur positive borne les répétitions
 sysctl kernel.panic_on_oops kernel.oops_limit
 
+# Magic SysRq : masque 64 = signaux aux processus, 128 = redémarrage/extinction
+# Exemple 176 (0xb0) autorise sync + remontage lecture seule + redémarrage
+sysctl kernel.sysrq
+stat -c '%A %U %G %n' /proc/sysrq-trigger
+
 # Quotas mémoire des pipes par utilisateur (0/0 = aucune limite par UID)
 sysctl fs.pipe-user-pages-soft fs.pipe-user-pages-hard
 getconf PAGE_SIZE
@@ -333,6 +338,8 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 > **Faux positif helper de core dump :** HardAudit suit les liens symboliques et vérifie chaque composant du chemin résolu. Un répertoire ou exécutable non possédé par root, ou inscriptible par groupe/autres, est critique car le kernel lance le helper avec les credentials root dans les namespaces initiaux. Une délégation volontaire doit éviter toute modification de ce chemin privilégié.
 
 > **Faux positif oops_limit :** `panic_on_oops=1` arrête immédiatement la machine au premier oops, ce qui peut transformer un bug en indisponibilité. HardAudit ne l'exige pas : il signale uniquement le couple `panic_on_oops=0` et `oops_limit=0`, qui désactive toute borne liée au nombre d'oops. Une valeur positive conserve une marge de diagnostic tout en limitant les répétitions.
+
+> **Faux positif Magic SysRq :** le redémarrage d'urgence peut être volontaire sur une machine disposant d'une console physique ou distante maîtrisée. HardAudit ne signale que les bits destructeurs `64` (signaux) et `128` (redémarrage/extinction), pas les fonctions de récupération sync/remontage. Le sysctl limite les frappes clavier mais ne bloque pas `/proc/sysrq-trigger` pour un administrateur ; retirer les bits uniquement après validation des procédures de secours.
 
 > **Faux positif quotas de pipes :** `pipe-user-pages-hard=0` seul est la valeur par défaut et ne signifie pas forcément « illimité en pratique » : une borne souple positive réduit déjà les nouveaux pipes après dépassement. HardAudit ne signale que le couple `soft=0, hard=0`. Dimensionner ces quotas selon le nombre de workers et la mémoire disponible ; une valeur trop basse peut casser des charges légitimes.
 

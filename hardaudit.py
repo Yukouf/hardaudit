@@ -1207,6 +1207,26 @@ def scan_unlimited_kernel_oopses(
     return None
 
 
+def scan_destructive_magic_sysrq(path="/proc/sys/kernel/sysrq"):
+    """Retourne les actions SysRq destructrices autorisees depuis le clavier.
+
+    Le mode 1 active toutes les fonctions. Pour un masque, 0x40 autorise les
+    signaux aux processus et 0x80 le redemarrage/extinction. L'interface root
+    /proc/sysrq-trigger n'est volontairement pas concernee par ce sysctl.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip(), 0)
+    except (OSError, ValueError):
+        return None
+    destructive = []
+    if value == 1 or value & 0x40:
+        destructive.append("signaux aux processus")
+    if value == 1 or value & 0x80:
+        destructive.append("redemarrage/extinction")
+    return (value, destructive) if destructive else None
+
+
 def scan_disabled_kstack_offset_randomization(config_path=None, cmdline_path="/proc/cmdline"):
     """Retourne la politique de boot si la pile kernel n'est pas randomisee."""
     if config_path is None:
@@ -1351,6 +1371,16 @@ def audit_kernel():
             "kernel.panic_on_oops = 0 et kernel.oops_limit = 0. Le kernel tente de continuer et ne panique jamais selon le nombre d'oops ; conserver une borne positive pour limiter les exploitations qui repetent une faute kernel.",
             "LOW",
             verify="sysctl kernel.panic_on_oops kernel.oops_limit",
+        )
+
+    destructive_sysrq = scan_destructive_magic_sysrq()
+    if destructive_sysrq is not None:
+        value, actions = destructive_sysrq
+        m.add(
+            "Magic SysRq autorise des actions destructrices",
+            f"kernel.sysrq = {value} autorise depuis le clavier : {', '.join(actions)}. Conserver seulement les bits de recuperation necessaires ; ce reglage ne bloque pas /proc/sysrq-trigger pour un administrateur.",
+            "LOW",
+            verify="sysctl kernel.sysrq; stat -c '%A %U %G %n' /proc/sysrq-trigger",
         )
 
     # Sans aucun quota par UID, un compte ordinaire peut accumuler la mémoire
