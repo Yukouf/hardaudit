@@ -112,7 +112,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
 | Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR et entropie mmap comparée au maximum compilé, ptrace, perf_events, syncookies, pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés, collecteurs pipe sans borne et chemin du helper root, répétition illimitée des oops kernel, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
-| Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires supprimés encore actifs |
+| Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires et bibliothèques supprimés encore exécutables en mémoire |
 | Filesystem | 10 | CIS 1.1 / ANSSI R28 | `/tmp` exécutable, cloisonnement `nodev,nosuid,noexec` de `/dev/shm`, world-writable, sticky bit, shadow, visibilité inter-utilisateurs de `/proc` |
 | Logs | 8 | CIS 4.x | auditd, rsyslog, logrotate |
 
@@ -194,6 +194,10 @@ grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_ra,forwarding} 2>/dev/null
 # Processus utilisant encore un ancien binaire après mise à jour
 sudo ls -l /proc/PID/exe
 sudo ps -fp PID
+
+# Bibliothèques/fichiers supprimés encore chargés avec le droit d'exécution
+sudo grep -F ' (deleted)' /proc/PID/maps
+# Une mise à jour légitime est fréquente ; un chemin /tmp, /var/tmp ou /dev/shm mérite une analyse rapide
 
 # Protections contre les fichiers et liens piégés dans les dossiers partagés
 sysctl fs.protected_hardlinks fs.protected_symlinks fs.protected_fifos fs.protected_regular

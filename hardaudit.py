@@ -1558,6 +1558,54 @@ def scan_deleted_executables(proc_root="/proc"):
     return sorted(found, key=lambda item: item["pid"])
 
 
+def scan_deleted_executable_mappings(proc_root="/proc"):
+    """Retourne les fichiers supprimes encore mappes avec le droit d'execution."""
+    found = []
+    try:
+        entries = os.listdir(proc_root)
+    except OSError:
+        return found
+
+    for pid in entries:
+        if not pid.isdigit():
+            continue
+        proc_dir = os.path.join(proc_root, pid)
+        try:
+            executable = os.readlink(os.path.join(proc_dir, "exe"))
+        except OSError:
+            executable = None
+        try:
+            with open(os.path.join(proc_dir, "maps"), encoding="utf-8", errors="replace") as maps:
+                targets = set()
+                for line in maps:
+                    fields = line.rstrip("\n").split(maxsplit=5)
+                    if len(fields) < 6 or "x" not in fields[1]:
+                        continue
+                    target = fields[5]
+                    if not target.endswith(" (deleted)") or target == executable:
+                        continue
+                    # Les memfd sont normalement affiches comme supprimes et sont
+                    # audites separement par leur politique d'execution.
+                    if target.startswith(("/memfd:", "/SYSV")):
+                        continue
+                    targets.add(target)
+        except OSError:
+            continue
+        if not targets:
+            continue
+        name = "unknown"
+        try:
+            with open(os.path.join(proc_dir, "comm"), encoding="utf-8", errors="replace") as comm:
+                name = comm.read().strip() or name
+        except OSError:
+            pass
+        found.extend(
+            {"pid": int(pid), "name": name, "target": target}
+            for target in sorted(targets)
+        )
+    return sorted(found, key=lambda item: (item["pid"], item["target"]))
+
+
 def audit_services():
     m = Module("Services & Cron", 10, "CIS 2.x")
     try:
@@ -1595,6 +1643,38 @@ def audit_services():
                 f"PID {proc['pid']} ({proc['name']}) utilise encore {proc['target']}. {context}",
                 severity,
                 verify=f"sudo ls -l /proc/{proc['pid']}/exe; sudo ps -fp {proc['pid']}",
+            )
+
+        # /proc/PID/exe ne montre que le programme principal. Une bibliotheque
+        # supprimee peut pourtant rester executable dans les mappings du processus.
+        deleted_mappings = scan_deleted_executable_mappings()
+        routine_updates = []
+        for mapping in deleted_mappings:
+            severity = classify_deleted_executable(mapping["target"])
+            if severity == "LOW":
+                routine_updates.append(mapping)
+                continue
+            m.add(
+                "Code supprime encore charge depuis un dossier temporaire",
+                f"PID {mapping['pid']} ({mapping['name']}) execute encore {mapping['target']}. Capturer et identifier le mapping rapidement.",
+                "HIGH",
+                verify=f"sudo grep -F ' (deleted)' /proc/{mapping['pid']}/maps; sudo ps -fp {mapping['pid']}",
+            )
+        if routine_updates:
+            processes = sorted({
+                (mapping["pid"], mapping["name"])
+                for mapping in routine_updates
+            })
+            preview = ", ".join(
+                f"{pid} ({name})" for pid, name in processes[:8]
+            )
+            if len(processes) > 8:
+                preview += f", +{len(processes) - 8} autres"
+            m.add(
+                "Services utilisant encore des bibliotheques remplacees",
+                f"{len(routine_updates)} mapping(s) executable(s) supprime(s) dans {len(processes)} processus : {preview}. Frequent apres une mise a jour ; redemarrer les services apres validation.",
+                "LOW",
+                verify="sudo grep -l -F ' (deleted)' /proc/[0-9]*/maps 2>/dev/null",
             )
     except: pass
     m.finalize()

@@ -1,4 +1,6 @@
+import ctypes
 import os
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -11,6 +13,7 @@ from hardaudit import (
     audit_kernel,
     audit_network,
     audit_filesystem,
+    audit_services,
     audit_users,
     classify_deleted_executable,
     classify_update_severity,
@@ -26,6 +29,7 @@ from hardaudit import (
     scan_unlimited_kexec_loads,
     scan_executable_memfd_default,
     scan_deleted_executables,
+    scan_deleted_executable_mappings,
     scan_fs_link_protections,
     scan_mount_options,
     scan_unlogged_martian_interfaces,
@@ -91,6 +95,70 @@ class DeletedExecutableTests(unittest.TestCase):
 
     def test_deleted_binary_in_temporary_directory_is_high_risk(self):
         self.assertEqual(classify_deleted_executable("/tmp/.cache-agent (deleted)"), "HIGH")
+
+    def test_detects_deleted_executable_mapping_without_duplicate_segments(self):
+        with tempfile.TemporaryDirectory() as proc:
+            process = os.path.join(proc, "4242")
+            os.makedirs(process)
+            os.symlink("/usr/bin/python3", os.path.join(process, "exe"))
+            with open(os.path.join(process, "comm"), "w", encoding="utf-8") as f:
+                f.write("python3\n")
+            with open(os.path.join(process, "maps"), "w", encoding="utf-8") as f:
+                f.write(
+                    "7f00-7f01 r-xp 00000000 00:01 7 /tmp/probe.so (deleted)\n"
+                    "7f01-7f02 r--p 00001000 00:01 7 /tmp/probe.so (deleted)\n"
+                    "7f02-7f03 r-xp 00002000 00:01 7 /tmp/probe.so (deleted)\n"
+                )
+
+            self.assertEqual(
+                scan_deleted_executable_mappings(proc),
+                [{
+                    "pid": 4242,
+                    "name": "python3",
+                    "target": "/tmp/probe.so (deleted)",
+                }],
+            )
+
+    def test_live_deleted_shared_library_mapping_is_detected_safely(self):
+        candidates = (
+            "/lib/x86_64-linux-gnu/libz.so.1",
+            "/usr/lib/x86_64-linux-gnu/libz.so.1",
+            "/lib64/libz.so.1",
+        )
+        source = next((path for path in candidates if os.path.exists(path)), None)
+        if source is None:
+            self.skipTest("aucune bibliotheque partagee representative disponible")
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = os.path.join(directory, "hardaudit-probe.so")
+            shutil.copy2(source, target)
+            library = ctypes.CDLL(target)
+            os.unlink(target)
+            findings = scan_deleted_executable_mappings()
+            self.assertTrue(any(
+                item["pid"] == os.getpid() and item["target"] == f"{target} (deleted)"
+                for item in findings
+            ))
+            self.assertIsNotNone(library)
+
+    def test_service_audit_reports_deleted_executable_mapping(self):
+        mapping = {
+            "pid": 4242,
+            "name": "python3",
+            "target": "/tmp/probe.so (deleted)",
+        }
+        with patch("hardaudit.subprocess.run") as run, \
+             patch("hardaudit.os.path.exists", return_value=False), \
+             patch("hardaudit.scan_deleted_executables", return_value=[]), \
+             patch("hardaudit.scan_deleted_executable_mappings", return_value=[mapping]):
+            run.return_value.returncode = 1
+            findings = [
+                finding for finding in audit_services().findings
+                if finding.title == "Code supprime encore charge depuis un dossier temporaire"
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "HIGH")
+        self.assertIn("/proc/4242/maps", findings[0].verify)
 
 
 class FilesystemProtectionTests(unittest.TestCase):
