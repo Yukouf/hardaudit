@@ -985,6 +985,42 @@ def scan_unconfined_userns_exception(
     return None
 
 
+def scan_suboptimal_aslr_entropy(
+    bits_path="/proc/sys/vm/mmap_rnd_bits",
+    compat_path="/proc/sys/vm/mmap_rnd_compat_bits",
+    config_path=None,
+):
+    """Compare l'entropie ASLR mmap aux maxima compiles pour ce kernel."""
+    if config_path is None:
+        config_path = f"/boot/config-{os.uname().release}"
+    try:
+        with open(config_path, encoding="utf-8") as config:
+            maximums = {}
+            for line in config:
+                if line.startswith("CONFIG_ARCH_MMAP_RND_BITS_MAX="):
+                    maximums["vm.mmap_rnd_bits"] = int(line.split("=", 1)[1])
+                elif line.startswith("CONFIG_ARCH_MMAP_RND_COMPAT_BITS_MAX="):
+                    maximums["vm.mmap_rnd_compat_bits"] = int(line.split("=", 1)[1])
+    except (OSError, ValueError):
+        return []
+
+    weak = []
+    for name, path in (
+        ("vm.mmap_rnd_bits", bits_path),
+        ("vm.mmap_rnd_compat_bits", compat_path),
+    ):
+        if name not in maximums:
+            continue
+        try:
+            with open(path, encoding="utf-8") as current_file:
+                current = int(current_file.read().strip())
+        except (OSError, ValueError):
+            continue
+        if current < maximums[name]:
+            weak.append((name, current, maximums[name]))
+    return weak
+
+
 def scan_zero_page_mappable(path="/proc/sys/vm/mmap_min_addr"):
     """Retourne 0 si les processus peuvent demander une projection a l'adresse nulle."""
     try:
@@ -1117,6 +1153,23 @@ def audit_kernel():
                 m.add(msg, f"{path} = {val} ({comparator}: {expected})", sev,
                       verify=f"cat {path}")
         except: pass
+
+    # randomize_va_space=2 active l'ASLR, mais l'amplitude mmap reste reglable.
+    # Comparer uniquement au maximum compile evite d'imposer une valeur qui ne
+    # serait pas supportee par l'architecture ou ce kernel.
+    for name, current, maximum in scan_suboptimal_aslr_entropy():
+        path = "/proc/sys/" + name.replace(".", "/")
+        config_key = (
+            "CONFIG_ARCH_MMAP_RND_COMPAT_BITS_MAX"
+            if name.endswith("compat_bits") else
+            "CONFIG_ARCH_MMAP_RND_BITS_MAX"
+        )
+        m.add(
+            "Entropie ASLR mmap inferieure au maximum du kernel",
+            f"{name} = {current} bits, alors que ce kernel accepte {maximum}. Augmenter progressivement jusqu'au maximum apres test des applications sensibles a l'espace d'adressage.",
+            "LOW",
+            verify=f"cat {path}; grep '^{config_key}={maximum}$' /boot/config-$(uname -r)",
+        )
 
     unsafe_suid_dumps = scan_unsafe_suid_dumps()
     if unsafe_suid_dumps is not None:

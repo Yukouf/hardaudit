@@ -51,6 +51,7 @@ from hardaudit import (
     scan_unrestricted_unprivileged_userns,
     scan_unconfined_userns_exception,
     scan_unlimited_kernel_oopses,
+    scan_suboptimal_aslr_entropy,
     scan_zero_page_mappable,
     shadow_permissions_unsafe,
 )
@@ -1165,6 +1166,52 @@ class BinfmtCredentialTests(unittest.TestCase):
 
 
 class KernelSysctlSemanticsTests(unittest.TestCase):
+    def test_aslr_entropy_below_architecture_maximum_is_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as bits, \
+                tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as compat, \
+                tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as config:
+            bits.write("28\n"); bits.flush()
+            compat.write("16\n"); compat.flush()
+            config.write(
+                "CONFIG_ARCH_MMAP_RND_BITS_MAX=32\n"
+                "CONFIG_ARCH_MMAP_RND_COMPAT_BITS_MAX=16\n"
+            ); config.flush()
+            self.assertEqual(
+                scan_suboptimal_aslr_entropy(bits.name, compat.name, config.name),
+                [("vm.mmap_rnd_bits", 28, 32)],
+            )
+
+    def test_representative_maximum_aslr_entropy_is_accepted(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as bits, \
+                tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as compat, \
+                tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as config:
+            bits.write("32\n"); bits.flush()
+            compat.write("16\n"); compat.flush()
+            config.write(
+                "CONFIG_ARCH_MMAP_RND_BITS_MAX=32\n"
+                "CONFIG_ARCH_MMAP_RND_COMPAT_BITS_MAX=16\n"
+            ); config.flush()
+            self.assertEqual(
+                scan_suboptimal_aslr_entropy(bits.name, compat.name, config.name),
+                [],
+            )
+
+    def test_live_aslr_entropy_is_exercised_read_only(self):
+        findings = scan_suboptimal_aslr_entropy()
+        self.assertIsInstance(findings, list)
+        for name, current, maximum in findings:
+            self.assertIn(name, ("vm.mmap_rnd_bits", "vm.mmap_rnd_compat_bits"))
+            self.assertLess(current, maximum)
+
+    def test_aslr_entropy_finding_is_emitted_for_weak_value(self):
+        weak = [("vm.mmap_rnd_bits", 28, 32)]
+        with patch("hardaudit.scan_suboptimal_aslr_entropy", return_value=weak):
+            findings = [f for f in audit_kernel().findings if "Entropie ASLR" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("28 bits", findings[0].detail)
+        self.assertIn("32", findings[0].verify)
+
     def test_unlimited_recoverable_oopses_are_reported(self):
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as panic, \
                 tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as limit:
