@@ -1451,6 +1451,30 @@ def scan_disabled_kstack_offset_randomization(config_path=None, cmdline_path="/p
     return None if enabled else (default_enabled, override)
 
 
+def scan_slab_cache_merging(config_path=None, cmdline_path="/proc/cmdline"):
+    """Retourne True si le kernel fusionne par defaut les caches slab compatibles.
+
+    Le parametre de boot ``slab_nomerge`` est la barriere runtime documentee.
+    Sans configuration du kernel lisible, le contrôle reste inconnu plutot que
+    de deduire une faiblesse depuis une simple absence dans la ligne de boot.
+    """
+    if config_path is None:
+        config_path = f"/boot/config-{os.uname().release}"
+    try:
+        with open(config_path, encoding="utf-8") as config:
+            default_merging = any(
+                line.strip() == "CONFIG_SLAB_MERGE_DEFAULT=y" for line in config
+            )
+        with open(cmdline_path, encoding="utf-8") as cmdline:
+            parameters = cmdline.read().split()
+    except OSError:
+        return None
+
+    if not default_merging or "slab_nomerge" in parameters:
+        return None
+    return True
+
+
 def audit_kernel():
     m = Module("Kernel & Protections", 14, "CIS 1.6 / ANSSI R14")
     checks = {
@@ -1509,6 +1533,17 @@ def audit_kernel():
             f"CONFIG_RANDOMIZE_KSTACK_OFFSET est disponible, mais {reason}. Cette protection ajoute environ 5 bits d'entropie a chaque entree syscall et complique les corruptions memoire qui dependent d'adresses de pile previsibles.",
             "LOW",
             verify="grep '^CONFIG_RANDOMIZE_KSTACK_OFFSET' /boot/config-$(uname -r); cat /proc/cmdline",
+        )
+
+    # Le kernel documente que slab_nomerge confine la plupart des effets d'une
+    # attaque heap a un seul cache, au prix de davantage de memoire et d'une
+    # moins bonne reutilisation du cache CPU.
+    if scan_slab_cache_merging() is True:
+        m.add(
+            "Fusion des caches slab active",
+            "CONFIG_SLAB_MERGE_DEFAULT est actif et slab_nomerge est absent de la ligne de demarrage. Des objets de sous-systemes differents peuvent partager un cache ; slab_nomerge reduit la plupart des effets d'une attaque heap a son cache d'origine, avec un cout memoire et de cache CPU.",
+            "LOW",
+            verify="grep '^CONFIG_SLAB_MERGE_DEFAULT=' /boot/config-$(uname -r); cat /proc/cmdline; find /sys/kernel/slab -maxdepth 1 -type l | head",
         )
 
     unsafe_suid_dumps = scan_unsafe_suid_dumps()

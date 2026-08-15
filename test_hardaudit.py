@@ -1874,5 +1874,46 @@ class FalsePositiveRegressionTests(unittest.TestCase):
         )
 
 
+class SlabCacheMergingTests(unittest.TestCase):
+    def _file(self, content):
+        handle = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        handle.write(content)
+        handle.flush()
+        return handle
+
+    def test_default_slab_merging_is_reported(self):
+        with self._file("CONFIG_SLAB_MERGE_DEFAULT=y\n") as config, \
+                self._file("BOOT_IMAGE=/vmlinuz quiet\n") as cmdline:
+            self.assertEqual(
+                hardaudit.scan_slab_cache_merging(config.name, cmdline.name),
+                True,
+            )
+
+        with patch("hardaudit.scan_slab_cache_merging", return_value=True):
+            findings = [
+                finding for finding in audit_kernel().findings
+                if "caches slab" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("heap", findings[0].detail)
+
+    def test_representative_slab_nomerge_boot_policy_passes(self):
+        with self._file("CONFIG_SLAB_MERGE_DEFAULT=y\n") as config, \
+                self._file("quiet slab_nomerge audit=1\n") as cmdline:
+            self.assertIsNone(
+                hardaudit.scan_slab_cache_merging(config.name, cmdline.name)
+            )
+
+        with self._file("# CONFIG_SLAB_MERGE_DEFAULT is not set\n") as config, \
+                self._file("quiet\n") as cmdline:
+            self.assertIsNone(
+                hardaudit.scan_slab_cache_merging(config.name, cmdline.name)
+            )
+
+    def test_live_slab_policy_is_exercised_read_only(self):
+        self.assertIn(hardaudit.scan_slab_cache_merging(), (None, True))
+
+
 if __name__ == "__main__":
     unittest.main()
