@@ -168,6 +168,9 @@ grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/accept_source_route 2>/dev/nul
 grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/drop_gratuitous_arp 2>/dev/null
 ip -4 neigh show
 
+# Destination IPv4 unicast cachée dans une trame L2 multicast/broadcast (1 = rejet)
+grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/drop_unicast_in_l2_multicast 2>/dev/null
+
 # Routage IPv6 : toute valeur négative refuse les en-têtes ; 0 accepte encore le type 2
 grep -H . /proc/sys/net/ipv6/conf/{all,default,*}/accept_source_route 2>/dev/null
 
@@ -386,6 +389,8 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 > **Faux positif source routing IPv4 :** ce mécanisme historique peut subsister dans un laboratoire réseau ou un équipement de test. HardAudit ne le signale que si `conf/all=1` **et** l'interface vaut `1`, condition effective documentée par le kernel ; la valeur `default=1` seule ne rend pas les interfaces existantes vulnérables.
 
 > **Faux positif ARP gratuit :** ces annonces sont indispensables à VRRP, aux adresses IP flottantes, à certaines migrations de VM/conteneurs et à la mobilité Wi-Fi. `arp_accept=0` empêche seulement de créer une nouvelle entrée : une entrée voisine existante peut encore être remplacée. Activer `drop_gratuitous_arp=1` uniquement sur une interface de réseau statique où ces mécanismes ne sont pas utilisés.
+
+> **Faux positif unicast dans L2 multicast :** le rejet suit une recommandation RFC 1122 et réduit notamment l'usurpation entre stations Wi-Fi, mais le kernel le désactive par défaut pour compatibilité. Une pile réseau ou un équipement ancien peut dépendre de trames L2 broadcast portant une destination IPv4 unicast ; tester la connectivité locale avant activation.
 
 > **Faux positif routage IPv6 :** la valeur par défaut `0` refuse les types inconnus mais accepte encore l'en-tête type 2 prévu pour Mobile IPv6. HardAudit le signale en `MEDIUM` lorsque la politique globale et locale sont toutes deux non négatives ; conserver ce mode seulement si Mobile IPv6 est réellement utilisé.
 

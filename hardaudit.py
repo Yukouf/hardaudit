@@ -289,6 +289,37 @@ def scan_gratuitous_arp_updates(root="/proc/sys/net/ipv4/conf"):
     return findings
 
 
+def scan_unicast_ipv4_in_l2_multicast(root="/proc/sys/net/ipv4/conf"):
+    """Liste les interfaces acceptant un paquet IPv4 unicast dans une trame L2 multicast."""
+    try:
+        with open(
+            os.path.join(root, "all", "drop_unicast_in_l2_multicast"),
+            encoding="utf-8",
+        ) as f:
+            all_value = int(f.read().strip())
+        interfaces = os.listdir(root)
+    except (OSError, ValueError):
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            with open(
+                os.path.join(root, interface, "drop_unicast_in_l2_multicast"),
+                encoding="utf-8",
+            ) as f:
+                interface_value = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        # ip_input.c utilise IN_DEV_ORCONF : la politique globale OU locale
+        # suffit à jeter cette incohérence entre les destinations L2 et L3.
+        if all_value == 0 and interface_value == 0:
+            findings.append((interface, all_value, interface_value))
+    return findings
+
+
 def scan_unsafe_ipv6_source_routing(root="/proc/sys/net/ipv6/conf"):
     """Liste les interfaces qui acceptent l'en-tete de routage IPv6 type 2."""
     try:
@@ -611,6 +642,16 @@ def audit_network(allowed_ports=None):
                 f"Interfaces concernees : {interfaces}. Une annonce ARP gratuite peut encore remplacer une entree existante du cache voisin, meme avec arp_accept=0. Activer drop_gratuitous_arp seulement sur un reseau statique qui n'utilise ni bascule IP, ni mobilite, ni proxy ARP.",
                 "LOW",
                 verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/drop_gratuitous_arp 2>/dev/null; ip -4 neigh show",
+            )
+
+        l2_multicast_unicast = scan_unicast_ipv4_in_l2_multicast()
+        if l2_multicast_unicast:
+            interfaces = ", ".join(item[0] for item in l2_multicast_unicast)
+            m.add(
+                "IPv4 unicast accepte dans des trames L2 multicast",
+                f"Interfaces concernees : {interfaces}. Une trame Ethernet ou Wi-Fi broadcast/multicast peut transporter une destination IP unicast et atteindre la pile locale ; le rejet est recommande par RFC 1122 et limite notamment l'usurpation entre clients Wi-Fi.",
+                "LOW",
+                verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/drop_unicast_in_l2_multicast 2>/dev/null",
             )
 
         ipv6_source_routing = scan_unsafe_ipv6_source_routing()
