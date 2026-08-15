@@ -289,6 +289,34 @@ def scan_gratuitous_arp_updates(root="/proc/sys/net/ipv4/conf"):
     return findings
 
 
+def scan_unsolicited_arp_learning(root="/proc/sys/net/ipv4/conf"):
+    """Liste les interfaces qui créent des voisins depuis des ARP non sollicités."""
+    try:
+        with open(os.path.join(root, "all", "arp_accept"), encoding="utf-8") as f:
+            all_value = int(f.read().strip())
+        interfaces = os.listdir(root)
+    except (OSError, ValueError):
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            with open(
+                os.path.join(root, interface, "arp_accept"), encoding="utf-8"
+            ) as f:
+                interface_value = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        # arp.c consulte IN_DEV_ARP_ACCEPT, défini comme IN_DEV_MAXCONF :
+        # la valeur effective est le maximum entre "all" et l'interface.
+        effective = max(all_value, interface_value)
+        if effective in (1, 2):
+            findings.append((interface, all_value, interface_value, effective))
+    return findings
+
+
 def scan_unicast_ipv4_in_l2_multicast(root="/proc/sys/net/ipv4/conf"):
     """Liste les interfaces acceptant un paquet IPv4 unicast dans une trame L2 multicast."""
     try:
@@ -688,6 +716,19 @@ def audit_network(allowed_ports=None):
                 f"Interfaces concernees : {interfaces}. Une annonce ARP gratuite peut encore remplacer une entree existante du cache voisin, meme avec arp_accept=0. Activer drop_gratuitous_arp seulement sur un reseau statique qui n'utilise ni bascule IP, ni mobilite, ni proxy ARP.",
                 "LOW",
                 verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/drop_gratuitous_arp 2>/dev/null; ip -4 neigh show",
+            )
+
+        unsolicited_arp = scan_unsolicited_arp_learning()
+        if unsolicited_arp:
+            interfaces = ", ".join(
+                f"{interface} (mode {effective})"
+                for interface, _, _, effective in unsolicited_arp
+            )
+            m.add(
+                "Apprentissage de voisins par ARP non sollicite",
+                f"arp_accept est effectif sur : {interfaces}. Le mode 1 peut creer une entree voisine depuis toute annonce ARP gratuite inconnue ; le mode 2 la limite au sous-reseau local. Conserver 0 sauf besoin HA, mobilite ou proxy ARP documente.",
+                "LOW",
+                verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/arp_accept 2>/dev/null; ip -4 neigh show",
             )
 
         l2_multicast_unicast = scan_unicast_ipv4_in_l2_multicast()

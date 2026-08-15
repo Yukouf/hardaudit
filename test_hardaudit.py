@@ -32,6 +32,7 @@ from hardaudit import (
     scan_deleted_executable_mappings,
     scan_fs_link_protections,
     scan_gratuitous_arp_updates,
+    scan_unsolicited_arp_learning,
     scan_unicast_ipv4_in_l2_multicast,
     scan_mount_options,
     scan_unlogged_martian_interfaces,
@@ -518,6 +519,49 @@ class GratuitousArpTests(unittest.TestCase):
         self.assertTrue(all(
             global_value == 0 and local_value == 0
             for _, global_value, local_value in findings
+        ))
+
+
+class UnsolicitedArpLearningTests(unittest.TestCase):
+    def _write_value(self, root, interface, value):
+        interface_dir = os.path.join(root, interface)
+        os.makedirs(interface_dir, exist_ok=True)
+        with open(os.path.join(interface_dir, "arp_accept"), "w", encoding="utf-8") as f:
+            f.write(f"{value}\n")
+
+    def test_effective_policy_uses_maximum_of_global_and_local_modes(self):
+        with tempfile.TemporaryDirectory() as root:
+            for interface, value in (
+                ("all", 1), ("default", 0), ("lo", 2),
+                ("eth0", 0), ("eth1", 2),
+            ):
+                self._write_value(root, interface, value)
+            self.assertEqual(
+                scan_unsolicited_arp_learning(root),
+                [("eth0", 1, 0, 1), ("eth1", 1, 2, 2)],
+            )
+
+    def test_network_audit_reports_new_neighbor_learning(self):
+        with patch(
+            "hardaudit.scan_unsolicited_arp_learning",
+            return_value=[("eth0", 0, 1, 1)],
+        ):
+            findings = [
+                finding for finding in audit_network().findings
+                if "voisins par arp non sollicite" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("eth0 (mode 1)", findings[0].detail)
+
+    def test_representative_live_policy_is_exercised_read_only(self):
+        root = "/proc/sys/net/ipv4/conf"
+        if not os.path.exists(os.path.join(root, "all", "arp_accept")):
+            self.skipTest("arp_accept is not exposed by this kernel")
+        findings = scan_unsolicited_arp_learning(root)
+        self.assertTrue(all(
+            effective == max(global_value, local_value) and effective in (1, 2)
+            for _, global_value, local_value, effective in findings
         ))
 
 
