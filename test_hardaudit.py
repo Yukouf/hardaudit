@@ -1968,6 +1968,32 @@ class KernelSysctlSemanticsTests(unittest.TestCase):
         self.assertFalse(kernel_sysctl_is_unsafe("kernel.dmesg_restrict", "1"))
 
 
+class PerfSamplingThrottleTests(unittest.TestCase):
+    def _sysctl(self, value):
+        sysctl = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        sysctl.write(f"{value}\n")
+        sysctl.flush()
+        return sysctl
+
+    def test_disabled_perf_cpu_throttle_is_reported(self):
+        with self._sysctl(0) as sysctl:
+            self.assertEqual(hardaudit.scan_disabled_perf_cpu_throttle(sysctl.name), 0)
+
+        with patch("hardaudit.scan_disabled_perf_cpu_throttle", return_value=0):
+            findings = [f for f in audit_kernel().findings if "echantillonnage perf" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("NMI", findings[0].detail)
+
+    def test_representative_positive_perf_cpu_throttle_passes(self):
+        with self._sysctl(25) as sysctl:
+            self.assertIsNone(hardaudit.scan_disabled_perf_cpu_throttle(sysctl.name))
+
+    def test_live_perf_cpu_throttle_is_read_without_modification(self):
+        result = hardaudit.scan_disabled_perf_cpu_throttle()
+        self.assertIn(result, (None, 0))
+
+
 class FalsePositiveRegressionTests(unittest.TestCase):
     def test_shadow_0640_owned_by_root_shadow_is_accepted(self):
         self.assertFalse(shadow_permissions_unsafe(0o640, 0, "shadow"))

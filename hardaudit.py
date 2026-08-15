@@ -1193,6 +1193,20 @@ def scan_bpf_jit_hardening(path="/proc/sys/net/core/bpf_jit_harden"):
     return value if value in (0, 1) else None
 
 
+def scan_disabled_perf_cpu_throttle(
+    path="/proc/sys/kernel/perf_cpu_time_max_percent",
+):
+    """Retourne 0 lorsque perf ne limite plus le temps CPU de l'échantillonnage."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    # La documentation kernel définit 0 comme la désactivation du mécanisme ;
+    # toute valeur de 1 à 100 conserve une forme de limitation adaptative.
+    return value if value == 0 else None
+
+
 def scan_unrestricted_io_uring(path="/proc/sys/kernel/io_uring_disabled"):
     """Retourne 0 lorsque tous les utilisateurs peuvent creer une instance io_uring."""
     try:
@@ -1666,6 +1680,17 @@ def audit_kernel():
                 m.add(msg, f"{path} = {val} ({comparator}: {expected})", sev,
                       verify=f"cat {path}")
         except: pass
+
+    # Les échantillons perf peuvent s'exécuter en NMI. Le kernel documente que
+    # des NMI trop longues peuvent s'empiler jusqu'à empêcher tout autre travail ;
+    # 0 désactive précisément le mécanisme qui réduit alors la fréquence.
+    if scan_disabled_perf_cpu_throttle() == 0:
+        m.add(
+            "Limiteur CPU de l'echantillonnage perf desactive",
+            "kernel.perf_cpu_time_max_percent = 0. Le kernel ne réduit plus la fréquence quand les échantillons perf consomment trop de CPU ; des NMI trop longues peuvent s'empiler et bloquer le reste du système. Utiliser une borne positive adaptée à l'observabilité.",
+            "LOW",
+            verify="sysctl kernel.perf_cpu_time_max_percent kernel.perf_event_paranoid",
+        )
 
     # randomize_va_space=2 active l'ASLR, mais l'amplitude mmap reste reglable.
     # Comparer uniquement au maximum compile evite d'imposer une valeur qui ne
