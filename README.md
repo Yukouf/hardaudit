@@ -111,7 +111,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 | Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), refus des routes IPv4 imposées par la source, en-têtes de routage IPv6 type 2, journalisation des sources impossibles, routage inhabituel de `127/8`, refus des paquets usurpant une adresse IPv4 locale, redirects ICMP IPv4/IPv6, routeurs acceptant encore les annonces IPv6 (`accept_ra=2`), RA dont la source appartient déjà à l'hôte, protection TCP TIME-WAIT contre les RST et refus des requêtes ICMP broadcast/multicast |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
-| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, entropie mmap et décalage aléatoire de la pile kernel à chaque syscall, ptrace, perf_events, syncookies, pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés, collecteurs pipe sans borne et chemin du helper root, chemins des helpers privilégiés `kernel.modprobe` et `kernel.hotplug`, répétition illimitée des oops kernel, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
+| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, entropie mmap et décalage aléatoire de la pile kernel à chaque syscall, ptrace, perf_events, syncookies, pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés, collecteurs pipe sans borne et chemin du helper root, chemins des helpers privilégiés `kernel.modprobe` et `kernel.hotplug`, répétition illimitée des oops kernel, segments de mémoire partagée SysV orphelins, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
 | Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires et bibliothèques supprimés encore exécutables en mémoire |
 | Filesystem | 10 | CIS 1.1 / ANSSI R28 | `/tmp` exécutable, cloisonnement `nodev,nosuid,noexec` de `/dev/shm`, world-writable, sticky bit, shadow, visibilité inter-utilisateurs de `/proc` |
 | Logs | 8 | CIS 4.x | auditd, rsyslog, logrotate |
@@ -249,6 +249,11 @@ stat -c '%A %U %G %n' /proc/sysrq-trigger
 sysctl fs.pipe-user-pages-soft fs.pipe-user-pages-hard
 getconf PAGE_SIZE
 
+# Segments SysV : ils peuvent survivre à leur créateur jusqu'à IPC_RMID
+cat /proc/sysvipc/shm
+ipcs -m
+sysctl kernel.shm_rmid_forced
+
 # Masquage des pointeurs kernel (0 = exposés, 1 = restreints, 2 = masqués même pour root)
 sysctl kernel.kptr_restrict
 
@@ -360,6 +365,8 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 > **Faux positif Magic SysRq :** le redémarrage d'urgence peut être volontaire sur une machine disposant d'une console physique ou distante maîtrisée. HardAudit ne signale que les bits destructeurs `64` (signaux) et `128` (redémarrage/extinction), pas les fonctions de récupération sync/remontage. Le sysctl limite les frappes clavier mais ne bloque pas `/proc/sysrq-trigger` pour un administrateur ; retirer les bits uniquement après validation des procédures de secours.
 
 > **Faux positif quotas de pipes :** `pipe-user-pages-hard=0` seul est la valeur par défaut et ne signifie pas forcément « illimité en pratique » : une borne souple positive réduit déjà les nouveaux pipes après dépassement. HardAudit ne signale que le couple `soft=0, hard=0`. Dimensionner ces quotas selon le nombre de workers et la mémoire disponible ; une valeur trop basse peut casser des charges légitimes.
+
+> **Faux positif mémoire SysV :** certaines applications conservent volontairement un segment sans attache pour qu'un processus lancé plus tard le réutilise. HardAudit attend une heure, exige que le créateur soit mort et ne supprime rien ; confirmer avec l'application avant `ipcrm`. `kernel.shm_rmid_forced=1` automatise le nettoyage mais peut casser cette sémantique et n'est utile avec des limites de ressources correctement configurées.
 
 > **Faux positif fichiers temporaires :** `protected_fifos=1` et `protected_regular=1` protègent déjà les dossiers sticky accessibles à tous, mais pas ceux inscriptibles par un groupe. HardAudit recommande `2` pour couvrir aussi ce cas ; conserver `1` peut être volontaire si des applications d'un groupe partagé doivent rouvrir avec `O_CREAT` des objets qu'elles ne possèdent pas.
 

@@ -5,7 +5,7 @@ Score sur 100, 9 modules, couleurs ANSI, export rapport.
 Usage : sudo python3 hardaudit.py [--json | --quiet]
 """
 
-import os, sys, re, pwd, grp, stat, socket, subprocess, json
+import os, sys, re, pwd, grp, stat, socket, subprocess, json, time
 from datetime import datetime
 from collections import OrderedDict
 
@@ -1327,6 +1327,54 @@ def scan_destructive_magic_sysrq(path="/proc/sys/kernel/sysrq"):
     return (value, destructive) if destructive else None
 
 
+def scan_orphaned_sysv_shared_memory(
+    table_path="/proc/sysvipc/shm",
+    proc_root="/proc",
+    min_age_seconds=3600,
+    now=None,
+):
+    """Liste les segments SysV anciens, sans attache et dont le createur est mort.
+
+    Un segment SysV peut survivre a son createur tant qu'IPC_RMID n'a pas ete
+    demande. Le delai evite de signaler les tres courtes fenetres normales entre
+    creation et attachement. Le test reste en lecture seule et propre au namespace
+    IPC depuis lequel HardAudit est execute.
+    """
+    try:
+        with open(table_path, encoding="utf-8") as table:
+            header = table.readline().split()
+            rows = [dict(zip(header, line.split())) for line in table if line.strip()]
+    except OSError:
+        return []
+
+    required = {"shmid", "size", "cpid", "nattch", "uid", "ctime"}
+    if not required.issubset(header):
+        return []
+    current_time = time.time() if now is None else now
+    orphaned = []
+    for row in rows:
+        try:
+            shmid = int(row["shmid"])
+            size = int(row["size"])
+            creator_pid = int(row["cpid"])
+            attached = int(row["nattch"])
+            owner_uid = int(row["uid"])
+            created_at = int(row["ctime"])
+        except (KeyError, ValueError):
+            continue
+        age = max(0, int(current_time - created_at))
+        if (attached == 0 and age >= min_age_seconds
+                and not os.path.exists(os.path.join(proc_root, str(creator_pid)))):
+            orphaned.append({
+                "shmid": shmid,
+                "size": size,
+                "creator_pid": creator_pid,
+                "owner_uid": owner_uid,
+                "age_seconds": age,
+            })
+    return orphaned
+
+
 def scan_disabled_kstack_offset_randomization(config_path=None, cmdline_path="/proc/cmdline"):
     """Retourne la politique de boot si la pile kernel n'est pas randomisee."""
     if config_path is None:
@@ -1522,6 +1570,24 @@ def audit_kernel():
             f"kernel.sysrq = {value} autorise depuis le clavier : {', '.join(actions)}. Conserver seulement les bits de recuperation necessaires ; ce reglage ne bloque pas /proc/sysrq-trigger pour un administrateur.",
             "LOW",
             verify="sysctl kernel.sysrq; stat -c '%A %U %G %n' /proc/sysrq-trigger",
+        )
+
+    # Contrairement a une projection memoire ordinaire, un segment SysV ne
+    # disparait pas forcement avec son createur. Ne signaler que les objets sans
+    # attache, vieux d'au moins une heure et dont le PID createur n'existe plus.
+    orphaned_shm = scan_orphaned_sysv_shared_memory()
+    if orphaned_shm:
+        total_bytes = sum(item["size"] for item in orphaned_shm)
+        examples = ", ".join(
+            f"shmid={item['shmid']} uid={item['owner_uid']} taille={item['size']}"
+            for item in orphaned_shm[:3]
+        )
+        suffix = "" if len(orphaned_shm) <= 3 else f" (+{len(orphaned_shm) - 3} autres)"
+        m.add(
+            "Segments de memoire partagee SysV orphelins",
+            f"{len(orphaned_shm)} segment(s) sans processus attache ni createur vivant depuis au moins une heure ({total_bytes} octets reserves) : {examples}{suffix}. Verifier les applications puis supprimer uniquement les identifiants obsoletes avec ipcrm.",
+            "LOW",
+            verify="cat /proc/sysvipc/shm; ipcs -m; sysctl kernel.shm_rmid_forced",
         )
 
     # Sans aucun quota par UID, un compte ordinaire peut accumuler la mémoire

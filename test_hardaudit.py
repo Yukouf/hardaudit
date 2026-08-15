@@ -59,6 +59,7 @@ from hardaudit import (
     scan_unconfined_userns_exception,
     scan_unlimited_kernel_oopses,
     scan_destructive_magic_sysrq,
+    scan_orphaned_sysv_shared_memory,
     scan_suboptimal_aslr_entropy,
     scan_zero_page_mappable,
     shadow_permissions_unsafe,
@@ -969,6 +970,75 @@ class HotplugHelperTests(unittest.TestCase):
         result = hardaudit.scan_enabled_hotplug_helper()
         if result is not None:
             self.assertTrue(result[0])
+
+
+class OrphanedSysvSharedMemoryTests(unittest.TestCase):
+    def _table(self, rows):
+        table = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        table.write(
+            "key shmid perms size cpid lpid nattch uid gid cuid cgid atime dtime ctime rss swap\n"
+        )
+        for row in rows:
+            table.write(" ".join(str(value) for value in row) + "\n")
+        table.flush()
+        return table
+
+    def test_only_old_unattached_segments_with_dead_creators_are_reported(self):
+        with tempfile.TemporaryDirectory() as proc:
+            os.mkdir(os.path.join(proc, "222"))
+            rows = [
+                (0, 11, 600, 4096, 111, 0, 0, 1000, 1000, 1000, 1000, 0, 0, 500, 0, 0),
+                (0, 12, 600, 8192, 222, 0, 0, 1000, 1000, 1000, 1000, 0, 0, 500, 0, 0),
+                (0, 13, 600, 16384, 333, 0, 1, 1000, 1000, 1000, 1000, 0, 0, 500, 0, 0),
+                (0, 14, 600, 32768, 444, 0, 0, 1000, 1000, 1000, 1000, 0, 0, 1900, 0, 0),
+            ]
+            with self._table(rows) as table:
+                self.assertEqual(
+                    scan_orphaned_sysv_shared_memory(table.name, proc, 300, now=2000),
+                    [{
+                        "shmid": 11,
+                        "size": 4096,
+                        "creator_pid": 111,
+                        "owner_uid": 1000,
+                        "age_seconds": 1500,
+                    }],
+                )
+
+        orphan = {
+            "shmid": 11, "size": 4096, "creator_pid": 111,
+            "owner_uid": 1000, "age_seconds": 7200,
+        }
+        with patch("hardaudit.scan_orphaned_sysv_shared_memory", return_value=[orphan]):
+            findings = [f for f in audit_kernel().findings if "SysV orphelins" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("ipcrm", findings[0].detail)
+
+    def test_representative_segment_really_survives_its_creator(self):
+        if not os.path.exists("/proc/sysvipc/shm") or not hasattr(os, "fork"):
+            self.skipTest("SysV IPC ou fork indisponible")
+        read_fd, write_fd = os.pipe()
+        child = os.fork()
+        if child == 0:
+            os.close(read_fd)
+            libc = ctypes.CDLL(None, use_errno=True)
+            shmid = libc.shmget(0, 4096, 0o1000 | 0o600)
+            os.write(write_fd, str(shmid).encode("ascii"))
+            os.close(write_fd)
+            os._exit(0 if shmid >= 0 else 1)
+
+        os.close(write_fd)
+        shmid_text = os.read(read_fd, 64)
+        os.close(read_fd)
+        _, status = os.waitpid(child, 0)
+        self.assertEqual(status, 0)
+        shmid = int(shmid_text)
+        libc = ctypes.CDLL(None, use_errno=True)
+        try:
+            findings = scan_orphaned_sysv_shared_memory(min_age_seconds=0)
+            self.assertTrue(any(item["shmid"] == shmid for item in findings))
+        finally:
+            self.assertEqual(libc.shmctl(shmid, 0, None), 0)
 
 
 class UnprivilegedBpfTests(unittest.TestCase):
