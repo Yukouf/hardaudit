@@ -111,7 +111,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 | Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), refus des routes IPv4 imposées par la source, blocage optionnel des annonces ARP gratuites sur réseaux statiques, création de voisins depuis des ARP non sollicités (`arp_accept`), en-têtes de routage IPv6 type 2, journalisation des sources impossibles, routage inhabituel de `127/8`, refus des paquets usurpant une adresse IPv4 locale, redirects ICMP IPv4/IPv6 et portée réelle de leur confiance (`shared_media` peut neutraliser `secure_redirects`), routeurs acceptant encore les annonces IPv6 (`accept_ra=2`), RA dont la source appartient déjà à l'hôte, protection TCP TIME-WAIT contre les RST et refus des requêtes ICMP broadcast/multicast |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
-| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, entropie mmap, décalage aléatoire de la pile kernel à chaque syscall et isolation des caches slab, ptrace, perf_events, syncookies, pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés, collecteurs pipe sans borne et chemin du helper root, chemins des helpers privilégiés `kernel.modprobe` et `kernel.hotplug`, répétition illimitée des oops kernel, segments de mémoire partagée SysV orphelins, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
+| Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, entropie mmap, décalage aléatoire de la pile kernel à chaque syscall, isolation des caches slab et mitigation des split locks x86, ptrace, perf_events, syncookies, pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés, collecteurs pipe sans borne et chemin du helper root, chemins des helpers privilégiés `kernel.modprobe` et `kernel.hotplug`, répétition illimitée des oops kernel, segments de mémoire partagée SysV orphelins, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
 | Services | 10 | CIS 2.x | Services obsolètes, cron jobs, binaires et bibliothèques supprimés encore exécutables en mémoire |
 | Filesystem | 10 | CIS 1.1 / ANSSI R28 | `/tmp` exécutable, cloisonnement `nodev,nosuid,noexec` de `/dev/shm`, world-writable, sticky bit, shadow, visibilité inter-utilisateurs de `/proc` |
 | Logs | 8 | CIS 4.x | auditd, rsyslog, logrotate |
@@ -313,6 +313,9 @@ grep '^CONFIG_SLAB_MERGE_DEFAULT=' /boot/config-$(uname -r)
 grep -o 'slab_nomerge' /proc/cmdline
 find /sys/kernel/slab -maxdepth 1 -type l | head
 
+# Split locks x86 : 1 sérialise et ralentit les processus qui pénalisent tout le système
+sysctl kernel.split_lock_mitigate
+
 # Autoload des disciplines TTY (0 = réservé à CAP_SYS_MODULE, 1 = non privilégié)
 sysctl dev.tty.ldisc_autoload
 
@@ -361,6 +364,8 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 > **Faux positif pile kernel :** ce décalage ajoute environ 5 bits d'entropie indépendamment de l'ASLR classique, avec un faible coût à chaque syscall. HardAudit ne conclut que si le support est compilé et que le défaut ou le paramètre de démarrage le désactive ; l'absence du fichier de configuration est traitée comme inconnue.
 
 > **Faux positif caches slab :** la fusion réduit l'empreinte mémoire et améliore la réutilisation du cache CPU. `slab_nomerge` cloisonne mieux les objets de sous-systèmes différents face aux débordements heap, mais augmente le nombre de caches ; mesurer la mémoire et les performances avant de l'ajouter durablement à la ligne de démarrage.
+
+> **Faux positif split locks :** le mode `1` ralentit volontairement les applications qui produisent des split locks et peut rendre un vieux logiciel très lent. Le mode `0` restaure ses performances mais réexpose tous les CPU au déni de service ; HardAudit ignore les architectures et kernels qui n'exposent pas ce sysctl.
 
 > **Faux positif /dev/shm :** certains logiciels créent puis exécutent directement du code dans `/dev/shm`. `noexec` peut les casser et n'empêche pas un interpréteur de lire un script ; c'est une réduction de surface, pas une frontière absolue. Tester avant de rendre l'option persistante.
 

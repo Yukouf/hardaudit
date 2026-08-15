@@ -229,6 +229,32 @@ class UserPipeMemoryTests(unittest.TestCase):
         self.assertIn(result, (None, (0, 0)))
 
 
+class SplitLockMitigationTests(unittest.TestCase):
+    def _sysctl(self, value):
+        sysctl = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        sysctl.write(f"{value}\n")
+        sysctl.flush()
+        return sysctl
+
+    def test_disabled_mitigation_is_reported(self):
+        with self._sysctl(0) as sysctl:
+            self.assertEqual(hardaudit.scan_disabled_split_lock_mitigation(sysctl.name), 0)
+
+        with patch("hardaudit.scan_disabled_split_lock_mitigation", return_value=0):
+            findings = [f for f in audit_kernel().findings if "split lock" in f.title.lower()]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("deni de service", findings[0].detail)
+
+    def test_representative_enabled_mitigation_passes(self):
+        with self._sysctl(1) as sysctl:
+            self.assertIsNone(hardaudit.scan_disabled_split_lock_mitigation(sysctl.name))
+
+    def test_live_policy_is_read_without_modification(self):
+        result = hardaudit.scan_disabled_split_lock_mitigation()
+        self.assertIn(result, (None, 0))
+
+
 class ProcVisibilityTests(unittest.TestCase):
     def _mountinfo(self, line):
         mountinfo = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")

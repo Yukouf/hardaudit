@@ -1627,6 +1627,18 @@ def scan_slab_cache_merging(config_path=None, cmdline_path="/proc/cmdline"):
     return True
 
 
+def scan_disabled_split_lock_mitigation(
+    path="/proc/sys/kernel/split_lock_mitigate",
+):
+    """Retourne 0 si le kernel x86 expose mais n'applique pas cette mitigation."""
+    try:
+        with open(path, encoding="utf-8") as sysctl:
+            value = int(sysctl.read().strip())
+    except (OSError, ValueError):
+        return None
+    return 0 if value == 0 else None
+
+
 def audit_kernel():
     m = Module("Kernel & Protections", 14, "CIS 1.6 / ANSSI R14")
     checks = {
@@ -1696,6 +1708,17 @@ def audit_kernel():
             "CONFIG_SLAB_MERGE_DEFAULT est actif et slab_nomerge est absent de la ligne de demarrage. Des objets de sous-systemes differents peuvent partager un cache ; slab_nomerge reduit la plupart des effets d'une attaque heap a son cache d'origine, avec un cout memoire et de cache CPU.",
             "LOW",
             verify="grep '^CONFIG_SLAB_MERGE_DEFAULT=' /boot/config-$(uname -r); cat /proc/cmdline; find /sys/kernel/slab -maxdepth 1 -type l | head",
+        )
+
+    # Sur x86, un split lock peut verrouiller le bus et penaliser tous les CPU.
+    # Le mode 1 serialise et ralentit les processus fautifs ; l'absence du
+    # sysctl signifie que la fonctionnalite n'est pas exposee, donc inconnue.
+    if scan_disabled_split_lock_mitigation() == 0:
+        m.add(
+            "Mitigation des split locks desactivee",
+            "kernel.split_lock_mitigate = 0. Un utilisateur non privilegie peut multiplier ces verrous couteux et imposer une forte penalite a tout le systeme ; le mode 1 serialise et ralentit les processus fautifs pour reduire ce deni de service.",
+            "LOW",
+            verify="sysctl kernel.split_lock_mitigate",
         )
 
     unsafe_suid_dumps = scan_unsafe_suid_dumps()
