@@ -259,6 +259,36 @@ def scan_unsafe_ipv4_source_routing(root="/proc/sys/net/ipv4/conf"):
     return findings
 
 
+def scan_gratuitous_arp_updates(root="/proc/sys/net/ipv4/conf"):
+    """Liste les interfaces qui acceptent encore les annonces ARP gratuites."""
+    try:
+        with open(
+            os.path.join(root, "all", "drop_gratuitous_arp"), encoding="utf-8"
+        ) as f:
+            all_value = int(f.read().strip())
+        interfaces = os.listdir(root)
+    except (OSError, ValueError):
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            with open(
+                os.path.join(root, interface, "drop_gratuitous_arp"),
+                encoding="utf-8",
+            ) as f:
+                interface_value = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        # arp.c utilise IN_DEV_ORCONF : la valeur globale OU locale suffit
+        # à jeter une trame ARP gratuite avant toute mise à jour du voisinage.
+        if all_value == 0 and interface_value == 0:
+            findings.append((interface, all_value, interface_value))
+    return findings
+
+
 def scan_unsafe_ipv6_source_routing(root="/proc/sys/net/ipv6/conf"):
     """Liste les interfaces qui acceptent l'en-tete de routage IPv6 type 2."""
     try:
@@ -571,6 +601,16 @@ def audit_network(allowed_ports=None):
                 f"accept_source_route vaut 1 globalement et sur : {interfaces}. Un paquet peut alors proposer lui-meme une partie de son trajet via l'option SRR ; desactiver sauf besoin de routage historique explicitement documente.",
                 "HIGH",
                 verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/accept_source_route 2>/dev/null",
+            )
+
+        gratuitous_arp = scan_gratuitous_arp_updates()
+        if gratuitous_arp:
+            interfaces = ", ".join(item[0] for item in gratuitous_arp)
+            m.add(
+                "Mises a jour par ARP gratuitous acceptees",
+                f"Interfaces concernees : {interfaces}. Une annonce ARP gratuite peut encore remplacer une entree existante du cache voisin, meme avec arp_accept=0. Activer drop_gratuitous_arp seulement sur un reseau statique qui n'utilise ni bascule IP, ni mobilite, ni proxy ARP.",
+                "LOW",
+                verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/drop_gratuitous_arp 2>/dev/null; ip -4 neigh show",
             )
 
         ipv6_source_routing = scan_unsafe_ipv6_source_routing()

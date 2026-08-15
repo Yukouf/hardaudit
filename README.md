@@ -108,7 +108,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 |---|---|---|---|
 | Utilisateurs | 12 | CIS 5.x | Root accessible, UID 0 non-root, sudo sans mdp, umask |
 | SSH | 12 | CIS 5.2 / ANSSI R5 | PermitRootLogin, PasswordAuth, X11Forwarding, port |
-| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), refus des routes IPv4 imposées par la source, en-têtes de routage IPv6 type 2, journalisation des sources impossibles, routage inhabituel de `127/8`, refus des paquets usurpant une adresse IPv4 locale, redirects ICMP IPv4/IPv6, routeurs acceptant encore les annonces IPv6 (`accept_ra=2`), RA dont la source appartient déjà à l'hôte, protection TCP TIME-WAIT contre les RST et refus des requêtes ICMP broadcast/multicast |
+| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), refus des routes IPv4 imposées par la source, blocage optionnel des annonces ARP gratuites sur réseaux statiques, en-têtes de routage IPv6 type 2, journalisation des sources impossibles, routage inhabituel de `127/8`, refus des paquets usurpant une adresse IPv4 locale, redirects ICMP IPv4/IPv6, routeurs acceptant encore les annonces IPv6 (`accept_ra=2`), RA dont la source appartient déjà à l'hôte, protection TCP TIME-WAIT contre les RST et refus des requêtes ICMP broadcast/multicast |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
 | Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, entropie mmap et décalage aléatoire de la pile kernel à chaque syscall, ptrace, perf_events, syncookies, pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés, collecteurs pipe sans borne et chemin du helper root, chemins des helpers privilégiés `kernel.modprobe` et `kernel.hotplug`, répétition illimitée des oops kernel, segments de mémoire partagée SysV orphelins, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor et exception des profils `unconfined`, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
@@ -163,6 +163,10 @@ grep -H . /proc/sys/net/ipv4/conf/*/rp_filter
 
 # Routes IPv4 proposées par le paquet : global ET interface doivent valoir 1 pour accepter
 grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/accept_source_route 2>/dev/null
+
+# ARP gratuit : "all=1" OU la valeur locale à 1 bloque la mise à jour du cache voisin
+grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/drop_gratuitous_arp 2>/dev/null
+ip -4 neigh show
 
 # Routage IPv6 : toute valeur négative refuse les en-têtes ; 0 accepte encore le type 2
 grep -H . /proc/sys/net/ipv6/conf/{all,default,*}/accept_source_route 2>/dev/null
@@ -373,6 +377,8 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 > **Faux positif rp_filter :** le mode strict `1` peut casser le routage asymétrique ou certains montages multi-interface. Le mode souple `2` vérifie que la source est joignable par une interface et constitue alors le compromis documenté par le kernel ; HardAudit accepte les deux et tient compte du maximum entre `conf/all` et chaque interface.
 
 > **Faux positif source routing IPv4 :** ce mécanisme historique peut subsister dans un laboratoire réseau ou un équipement de test. HardAudit ne le signale que si `conf/all=1` **et** l'interface vaut `1`, condition effective documentée par le kernel ; la valeur `default=1` seule ne rend pas les interfaces existantes vulnérables.
+
+> **Faux positif ARP gratuit :** ces annonces sont indispensables à VRRP, aux adresses IP flottantes, à certaines migrations de VM/conteneurs et à la mobilité Wi-Fi. `arp_accept=0` empêche seulement de créer une nouvelle entrée : une entrée voisine existante peut encore être remplacée. Activer `drop_gratuitous_arp=1` uniquement sur une interface de réseau statique où ces mécanismes ne sont pas utilisés.
 
 > **Faux positif routage IPv6 :** la valeur par défaut `0` refuse les types inconnus mais accepte encore l'en-tête type 2 prévu pour Mobile IPv6. HardAudit le signale en `MEDIUM` lorsque la politique globale et locale sont toutes deux non négatives ; conserver ce mode seulement si Mobile IPv6 est réellement utilisé.
 
