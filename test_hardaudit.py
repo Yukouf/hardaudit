@@ -1747,6 +1747,55 @@ class KernelModuleLoadingLockTests(unittest.TestCase):
             self.assertIsNone(hardaudit.scan_module_loading_unlocked(sysctl.name))
 
 
+class KernelModuleSignatureTests(unittest.TestCase):
+    def _file(self, content):
+        handle = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        handle.write(content)
+        handle.flush()
+        return handle
+
+    def test_permissive_signature_verification_is_reported(self):
+        with self._file("CONFIG_MODULE_SIG=y\n") as config, \
+                self._file("quiet splash\n") as cmdline, \
+                self._file("0\n") as modules_disabled, \
+                self._file("[none] integrity confidentiality\n") as lockdown:
+            self.assertEqual(
+                hardaudit.scan_permissive_module_signatures(
+                    config.name, cmdline.name, modules_disabled.name, lockdown.name
+                ),
+                "permissive",
+            )
+
+        with patch("hardaudit.scan_permissive_module_signatures", return_value="permissive"):
+            findings = [f for f in audit_kernel().findings if "non signes" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("CAP_SYS_MODULE", findings[0].detail)
+
+    def test_representative_enforcement_paths_pass(self):
+        scenarios = (
+            ("CONFIG_MODULE_SIG=y\nCONFIG_MODULE_SIG_FORCE=y\n", "quiet\n", "0\n", "[none] integrity confidentiality\n"),
+            ("CONFIG_MODULE_SIG=y\n", "module.sig_enforce=1\n", "0\n", "[none] integrity confidentiality\n"),
+            ("CONFIG_MODULE_SIG=y\n", "quiet\n", "0\n", "none [integrity] confidentiality\n"),
+            ("CONFIG_MODULE_SIG=y\n", "quiet\n", "1\n", "[none] integrity confidentiality\n"),
+        )
+        for config_value, cmdline_value, disabled_value, lockdown_value in scenarios:
+            with self.subTest(scenario=(config_value, cmdline_value, disabled_value, lockdown_value)), \
+                    self._file(config_value) as config, \
+                    self._file(cmdline_value) as cmdline, \
+                    self._file(disabled_value) as modules_disabled, \
+                    self._file(lockdown_value) as lockdown:
+                self.assertIsNone(
+                    hardaudit.scan_permissive_module_signatures(
+                        config.name, cmdline.name, modules_disabled.name, lockdown.name
+                    )
+                )
+
+    def test_live_policy_is_exercised_read_only(self):
+        result = hardaudit.scan_permissive_module_signatures()
+        self.assertIn(result, (None, "permissive", "unsupported"))
+
+
 class KernelLockdownTests(unittest.TestCase):
     def test_available_but_disabled_lockdown_is_reported(self):
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as status:

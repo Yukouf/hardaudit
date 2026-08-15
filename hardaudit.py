@@ -1298,6 +1298,53 @@ def scan_module_loading_unlocked(path="/proc/sys/kernel/modules_disabled"):
     return value if value == 0 else None
 
 
+def scan_permissive_module_signatures(
+    config_path=None,
+    cmdline_path="/proc/cmdline",
+    modules_disabled_path="/proc/sys/kernel/modules_disabled",
+    lockdown_path="/sys/kernel/security/lockdown",
+):
+    """Détecte les modules chargeables sans signature valide obligatoire.
+
+    Un verrou global des modules, CONFIG_MODULE_SIG_FORCE, le paramètre de boot
+    module.sig_enforce=1 ou un mode Lockdown actif ferment chacun cette voie.
+    Si l'une des preuves nécessaires est illisible, le résultat reste inconnu.
+    """
+    if config_path is None:
+        config_path = f"/boot/config-{os.uname().release}"
+    try:
+        with open(modules_disabled_path, encoding="utf-8") as policy:
+            modules_disabled = int(policy.read().strip())
+        with open(config_path, encoding="utf-8") as config:
+            options = {
+                line.split("=", 1)[0]: line.split("=", 1)[1].strip()
+                for line in config
+                if line.startswith("CONFIG_MODULE_SIG") and "=" in line
+            }
+        with open(cmdline_path, encoding="utf-8") as cmdline:
+            parameters = set(cmdline.read().split())
+        with open(lockdown_path, encoding="utf-8") as lockdown:
+            lockdown_status = lockdown.read().split()
+    except (OSError, ValueError):
+        return None
+
+    if modules_disabled != 0:
+        return None
+    if options.get("CONFIG_MODULE_SIG_FORCE") == "y":
+        return None
+    if "module.sig_enforce=1" in parameters:
+        return None
+    active_lockdown = next(
+        (mode.strip("[]") for mode in lockdown_status if mode.startswith("[")),
+        None,
+    )
+    if active_lockdown in {"integrity", "confidentiality"}:
+        return None
+
+    signature_support = options.get("CONFIG_MODULE_SIG") == "y"
+    return "permissive" if signature_support else "unsupported"
+
+
 def scan_unprivileged_userfaultfd(path="/proc/sys/vm/unprivileged_userfaultfd"):
     """Retourne 1 si userfaultfd peut intercepter des fautes kernel sans privilege."""
     try:
@@ -2143,6 +2190,24 @@ def audit_kernel():
             f"{path} = 0. Une appliance stable peut utiliser 1 apres avoir charge tous ses pilotes ; ce verrou bloque chargement et retrait et est irreversible jusqu'au redemarrage.",
             "LOW",
             verify=f"cat {path}; lsmod",
+        )
+
+    # La verification cryptographique peut être compilée sans être obligatoire :
+    # dans ce mode permissif, le kernel documente qu'un module non signe reste
+    # chargeable et ne fait que marquer le kernel comme tainted. Lockdown, le
+    # verrou global, CONFIG_MODULE_SIG_FORCE ou module.sig_enforce=1 compensent.
+    module_signature_policy = scan_permissive_module_signatures()
+    if module_signature_policy is not None:
+        support = (
+            "La verification existe mais reste permissive"
+            if module_signature_policy == "permissive" else
+            "Ce kernel n'a pas le support de verification des signatures"
+        )
+        m.add(
+            "Modules noyau non signes encore chargeables",
+            f"{support}, tandis que le chargement dynamique et Kernel Lockdown restent ouverts. Un module sans signature valide peut donc entrer dans le kernel avec CAP_SYS_MODULE ; activer module.sig_enforce=1 au demarrage ou CONFIG_MODULE_SIG_FORCE apres avoir signe tous les modules requis.",
+            "LOW",
+            verify="grep '^CONFIG_MODULE_SIG' /boot/config-$(uname -r); cat /proc/cmdline; cat /proc/sys/kernel/modules_disabled; cat /sys/kernel/security/lockdown",
         )
 
     # Lockdown limite ce que même root peut demander au kernel. Ne signaler que
