@@ -39,6 +39,7 @@ from hardaudit import (
     scan_proc_hidepid,
     scan_routed_loopback_interfaces,
     scan_unsafe_ipv4_source_routing,
+    scan_broad_ipv4_redirect_trust,
     scan_unsafe_ipv4_redirect_senders,
     scan_unsafe_ipv4_redirects,
     scan_unsafe_ipv6_redirects,
@@ -671,6 +672,8 @@ class IcmpRedirectTests(unittest.TestCase):
         with patch(
             "hardaudit.scan_unsafe_ipv4_redirects",
             return_value=[("eth0", 0, 1, 0)],
+        ), patch(
+            "hardaudit.scan_broad_ipv4_redirect_trust", return_value=[]
         ), patch("hardaudit.scan_unsafe_ipv4_redirect_senders", return_value=[]), \
                 patch("hardaudit.scan_unsafe_ipv6_redirects", return_value=[]):
             findings = [f for f in audit_network().findings if "ICMP IPv4" in f.title]
@@ -685,6 +688,64 @@ class IcmpRedirectTests(unittest.TestCase):
             self._write_interface(root, "eth0", 1, 1)
             self._write_interface(root, "lo", 1, 1)
             self.assertEqual(scan_unsafe_ipv4_redirects(root), [])
+
+    def _write_redirect_policy(self, root, interface, accept, forwarding, shared, secure):
+        interface_dir = os.path.join(root, interface)
+        os.makedirs(interface_dir)
+        for name, value in (
+            ("accept_redirects", accept),
+            ("forwarding", forwarding),
+            ("shared_media", shared),
+            ("secure_redirects", secure),
+        ):
+            with open(os.path.join(interface_dir, name), "w", encoding="utf-8") as f:
+                f.write(f"{value}\n")
+
+    def test_shared_media_overrides_secure_redirect_gateway_check(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_redirect_policy(root, "all", 0, 0, 1, 1)
+            self._write_redirect_policy(root, "default", 0, 0, 1, 1)
+            self._write_redirect_policy(root, "eth0", 1, 0, 0, 1)
+            self._write_redirect_policy(root, "eth1", 0, 0, 0, 1)
+            self._write_redirect_policy(root, "lo", 1, 0, 1, 1)
+            self.assertEqual(
+                scan_broad_ipv4_redirect_trust(root),
+                [("eth0", 1, 0, 1, 1)],
+            )
+
+        with patch(
+            "hardaudit.scan_unsafe_ipv4_redirects", return_value=[("eth0", 0, 1, 0)]
+        ), patch(
+            "hardaudit.scan_broad_ipv4_redirect_trust",
+            return_value=[("eth0", 1, 0, 1, 1)],
+        ), patch("hardaudit.scan_unsafe_ipv4_redirect_senders", return_value=[]), \
+                patch("hardaudit.scan_unsafe_ipv6_redirects", return_value=[]):
+            finding = next(
+                f for f in audit_network().findings
+                if f.title == "Acceptation effective des redirects ICMP IPv4"
+            )
+        self.assertIn("shared_media outrepasse", finding.detail)
+
+    def test_secure_redirects_restricts_active_policy_when_shared_media_is_off(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_redirect_policy(root, "all", 0, 0, 0, 1)
+            self._write_redirect_policy(root, "default", 0, 0, 0, 1)
+            self._write_redirect_policy(root, "eth0", 1, 0, 0, 0)
+            self.assertEqual(scan_broad_ipv4_redirect_trust(root), [])
+
+    def test_live_redirect_trust_is_evaluated_read_only(self):
+        root = "/proc/sys/net/ipv4/conf"
+        required = ("accept_redirects", "forwarding", "shared_media", "secure_redirects")
+        if not all(os.path.exists(os.path.join(root, "all", name)) for name in required):
+            self.skipTest("IPv4 redirect trust controls are not exposed by this kernel")
+        findings = scan_broad_ipv4_redirect_trust(root)
+        for interface, shared_all, shared_local, secure_all, secure_local in findings:
+            self.assertNotIn(interface, ("all", "default", "lo"))
+            self.assertTrue(
+                shared_all == 1
+                or shared_local == 1
+                or not (secure_all == 1 or secure_local == 1)
+            )
 
     def test_live_values_are_evaluated_without_modification(self):
         root = "/proc/sys/net/ipv4/conf"

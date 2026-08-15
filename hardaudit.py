@@ -455,6 +455,52 @@ def scan_unsafe_ipv4_redirects(root="/proc/sys/net/ipv4/conf"):
     return findings
 
 
+def scan_broad_ipv4_redirect_trust(root="/proc/sys/net/ipv4/conf"):
+    """Liste les interfaces qui acceptent des redirects sans limiter la passerelle.
+
+    shared_media effectif outrepasse secure_redirects, meme si ce dernier vaut 1.
+    Sans shared_media, secure_redirects doit etre effectif pour limiter les redirects
+    aux passerelles deja connues de l'interface.
+    """
+    try:
+        def read_global(name):
+            with open(os.path.join(root, "all", name), encoding="utf-8") as f:
+                return int(f.read().strip())
+
+        accept_all = read_global("accept_redirects")
+        shared_all = read_global("shared_media")
+        secure_all = read_global("secure_redirects")
+        interfaces = os.listdir(root)
+    except (OSError, ValueError):
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            values = []
+            for name in ("accept_redirects", "forwarding", "shared_media", "secure_redirects"):
+                with open(os.path.join(root, interface, name), encoding="utf-8") as f:
+                    values.append(int(f.read().strip()))
+        except (OSError, ValueError):
+            continue
+
+        accept_local, forwarding, shared_local, secure_local = values
+        accepts = (
+            accept_all == 1 and accept_local == 1
+            if forwarding == 1
+            else accept_all == 1 or accept_local == 1
+        )
+        shared_effective = shared_all == 1 or shared_local == 1
+        secure_effective = secure_all == 1 or secure_local == 1
+        if accepts and (shared_effective or not secure_effective):
+            findings.append(
+                (interface, shared_all, shared_local, secure_all, secure_local)
+            )
+    return findings
+
+
 def scan_unsafe_ipv4_redirect_senders(root="/proc/sys/net/ipv4/conf"):
     """Liste les interfaces routeur qui envoient effectivement des redirects ICMP."""
     try:
@@ -695,13 +741,37 @@ def audit_network(allowed_ports=None):
             )
 
         redirect_findings = scan_unsafe_ipv4_redirects()
+        broad_redirect_trust = scan_broad_ipv4_redirect_trust()
         if redirect_findings:
             interfaces = ", ".join(item[0] for item in redirect_findings)
+            broad_by_interface = {item[0]: item for item in broad_redirect_trust}
+            broad_interfaces = sorted(
+                {item[0] for item in redirect_findings} & set(broad_by_interface)
+            )
+            shared_interfaces = [
+                interface for interface in broad_interfaces
+                if broad_by_interface[interface][1] == 1
+                or broad_by_interface[interface][2] == 1
+            ]
+            unrestricted_interfaces = [
+                interface for interface in broad_interfaces
+                if interface not in shared_interfaces
+            ]
+            trust_notes = []
+            if shared_interfaces:
+                trust_notes.append(
+                    f"Sur {', '.join(shared_interfaces)}, shared_media outrepasse secure_redirects : la passerelle proposee n'est pas limitee aux passerelles deja connues."
+                )
+            if unrestricted_interfaces:
+                trust_notes.append(
+                    f"Sur {', '.join(unrestricted_interfaces)}, secure_redirects est inactif : la passerelle proposee n'est pas limitee aux passerelles deja connues."
+                )
+            trust_note = f" {' '.join(trust_notes)}" if trust_notes else ""
             m.add(
                 "Acceptation effective des redirects ICMP IPv4",
-                f"Interfaces concernees : {interfaces}. Sur un hote, une valeur locale a 1 suffit meme si conf/all vaut 0 ; un voisin reseau peut alors tenter de modifier la route utilisee. Desactiver apres verification des besoins de routage.",
+                f"Interfaces concernees : {interfaces}. Sur un hote, une valeur locale a 1 suffit meme si conf/all vaut 0 ; un voisin reseau peut alors tenter de modifier la route utilisee.{trust_note} Desactiver apres verification des besoins de routage.",
                 "MEDIUM",
-                verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*/}{accept_redirects,forwarding} 2>/dev/null",
+                verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/{accept_redirects,forwarding,shared_media,secure_redirects} 2>/dev/null",
             )
 
         redirect_senders = scan_unsafe_ipv4_redirect_senders()
