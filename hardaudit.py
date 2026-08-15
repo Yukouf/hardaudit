@@ -1372,6 +1372,25 @@ def scan_unconfined_userns_exception(
     return None
 
 
+def scan_legacy_apparmor_userns_bypass(
+    userns_path="/proc/sys/kernel/unprivileged_userns_clone",
+    restriction_path="/proc/sys/kernel/apparmor_restrict_unprivileged_userns",
+    force_path="/proc/sys/kernel/apparmor_restrict_unprivileged_userns_force",
+):
+    """Détecte les anciennes ABI de politique exemptées de la médiation userns."""
+    try:
+        values = []
+        for path in (userns_path, restriction_path, force_path):
+            with open(path, encoding="utf-8") as f:
+                values.append(int(f.read().strip()))
+    except (OSError, ValueError):
+        return None
+    userns_enabled, apparmor_restricted, legacy_policy_forced = values
+    if userns_enabled == 1 and apparmor_restricted == 1 and legacy_policy_forced == 0:
+        return tuple(values)
+    return None
+
+
 def scan_suboptimal_aslr_entropy(
     bits_path="/proc/sys/vm/mmap_rnd_bits",
     compat_path="/proc/sys/vm/mmap_rnd_compat_bits",
@@ -2045,6 +2064,18 @@ def audit_kernel():
             f"{path} = 0 alors que la mediation userns AppArmor est active. Les profils marques unconfined peuvent conserver leur propre permission de creer un namespace utilisateur ; utiliser 1 apres verification des profils applicatifs.",
             "LOW",
             verify="sysctl kernel.unprivileged_userns_clone kernel.apparmor_restrict_unprivileged_userns kernel.apparmor_restrict_unprivileged_unconfined",
+        )
+
+    # La compatibilité ABI d'AppArmor peut dispenser les anciennes politiques
+    # de la médiation userns. Le mode force ferme ce contournement, au risque de
+    # casser un profil ancien qui ne déclare pas encore explicitement userns.
+    if scan_legacy_apparmor_userns_bypass() == (1, 1, 0):
+        path = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns_force"
+        m.add(
+            "Anciennes ABI AppArmor exemptées de la médiation userns",
+            f"{path} = 0 alors que la restriction userns est active. Les politiques anciennes peuvent contourner cette médiation par compatibilité ABI ; utiliser 1 seulement après avoir actualisé et testé les profils AppArmor.",
+            "LOW",
+            verify="sysctl kernel.unprivileged_userns_clone kernel.apparmor_restrict_unprivileged_userns kernel.apparmor_restrict_unprivileged_userns_force",
         )
 
     # Interdire la premiere page empeche un processus non privilegie d'y placer

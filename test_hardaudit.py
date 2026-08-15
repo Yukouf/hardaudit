@@ -1592,6 +1592,38 @@ class AppArmorUserNamespaceRestrictionTests(unittest.TestCase):
             self.skipTest("ce kernel n'expose pas la politique AppArmor unconfined")
         self.assertIn(scan_unconfined_userns_exception(), ((1, 1, 0), None))
 
+    def test_legacy_policy_abi_bypass_is_reported(self):
+        with self._sysctl(1) as userns, self._sysctl(1) as restriction, self._sysctl(0) as force:
+            self.assertEqual(
+                hardaudit.scan_legacy_apparmor_userns_bypass(
+                    userns.name, restriction.name, force.name
+                ),
+                (1, 1, 0),
+            )
+
+        with patch("hardaudit.scan_legacy_apparmor_userns_bypass", return_value=(1, 1, 0)):
+            findings = [f for f in audit_kernel().findings if "ABI AppArmor" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("anciennes", findings[0].detail)
+
+    def test_forced_userns_mediation_covers_legacy_policy_abis(self):
+        with self._sysctl(1) as userns, self._sysctl(1) as restriction, self._sysctl(1) as force:
+            self.assertIsNone(
+                hardaudit.scan_legacy_apparmor_userns_bypass(
+                    userns.name, restriction.name, force.name
+                )
+            )
+
+    def test_live_legacy_policy_switch_is_exercised_read_only(self):
+        path = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns_force"
+        if not os.path.exists(path):
+            self.skipTest("ce kernel n'expose pas le controle ABI AppArmor userns")
+        self.assertIn(
+            hardaudit.scan_legacy_apparmor_userns_bypass(),
+            ((1, 1, 0), None),
+        )
+
 
 class NullPageMappingTests(unittest.TestCase):
     def test_zero_floor_is_reported(self):
