@@ -62,6 +62,7 @@ from hardaudit import (
     scan_unrestricted_unprivileged_userns,
     scan_unconfined_userns_exception,
     scan_unlimited_kernel_oopses,
+    scan_unlimited_kernel_warnings,
     scan_destructive_magic_sysrq,
     scan_orphaned_sysv_shared_memory,
     scan_suboptimal_aslr_entropy,
@@ -253,6 +254,42 @@ class SplitLockMitigationTests(unittest.TestCase):
     def test_live_policy_is_read_without_modification(self):
         result = hardaudit.scan_disabled_split_lock_mitigation()
         self.assertIn(result, (None, 0))
+
+
+class KernelWarningLimitTests(unittest.TestCase):
+    def _sysctl(self, value):
+        sysctl = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        sysctl.write(f"{value}\n")
+        sysctl.flush()
+        return sysctl
+
+    def test_disabled_panic_and_warning_counter_are_reported(self):
+        with self._sysctl(0) as panic, self._sysctl(0) as limit:
+            self.assertEqual(
+                scan_unlimited_kernel_warnings(panic.name, limit.name),
+                (0, 0),
+            )
+
+        with patch("hardaudit.scan_unlimited_kernel_warnings", return_value=(0, 0)):
+            findings = [
+                finding for finding in audit_kernel().findings
+                if "warnings kernel" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("compteur desactive", findings[0].detail)
+
+    def test_positive_warning_limit_is_accepted(self):
+        with self._sysctl(0) as panic, self._sysctl(100) as limit:
+            self.assertIsNone(scan_unlimited_kernel_warnings(panic.name, limit.name))
+
+    def test_panic_on_first_warning_is_accepted(self):
+        with self._sysctl(1) as panic, self._sysctl(0) as limit:
+            self.assertIsNone(scan_unlimited_kernel_warnings(panic.name, limit.name))
+
+    def test_live_warning_policy_is_read_without_modification(self):
+        result = scan_unlimited_kernel_warnings()
+        self.assertIn(result, (None, (0, 0)))
 
 
 class ProcVisibilityTests(unittest.TestCase):

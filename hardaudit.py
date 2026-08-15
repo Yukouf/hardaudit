@@ -1513,6 +1513,23 @@ def scan_unlimited_kernel_oopses(
     return None
 
 
+def scan_unlimited_kernel_warnings(
+    panic_path="/proc/sys/kernel/panic_on_warn",
+    limit_path="/proc/sys/kernel/warn_limit",
+):
+    """Retourne la politique si le nombre de WARN ne peut jamais provoquer de panic."""
+    try:
+        with open(panic_path, encoding="utf-8") as f:
+            panic_on_warn = int(f.read().strip())
+        with open(limit_path, encoding="utf-8") as f:
+            warn_limit = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    if panic_on_warn == 0 and warn_limit == 0:
+        return panic_on_warn, warn_limit
+    return None
+
+
 def scan_destructive_magic_sysrq(path="/proc/sys/kernel/sysrq"):
     """Retourne les actions SysRq destructrices autorisees depuis le clavier.
 
@@ -1835,6 +1852,17 @@ def audit_kernel():
             "kernel.panic_on_oops = 0 et kernel.oops_limit = 0. Le kernel tente de continuer et ne panique jamais selon le nombre d'oops ; conserver une borne positive pour limiter les exploitations qui repetent une faute kernel.",
             "LOW",
             verify="sysctl kernel.panic_on_oops kernel.oops_limit",
+        )
+
+    # warn_limit=0 ne signifie pas tolerance zero : la documentation kernel dit
+    # que cette valeur desactive le compteur. Une borne positive evite une suite
+    # infinie de WARN sans imposer une indisponibilite au premier avertissement.
+    if scan_unlimited_kernel_warnings() == (0, 0):
+        m.add(
+            "Warnings kernel repetables sans limite",
+            "kernel.panic_on_warn = 0 et kernel.warn_limit = 0. La valeur 0 signifie compteur desactive : aucune accumulation de WARN ne declenchera de panic. Utiliser une borne positive dimensionnee apres avoir corrige les warnings legitimes ; panic_on_warn=1 peut transformer le premier bug en indisponibilite.",
+            "LOW",
+            verify="sysctl kernel.panic_on_warn kernel.warn_limit",
         )
 
     destructive_sysrq = scan_destructive_magic_sysrq()
