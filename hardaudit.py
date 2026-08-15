@@ -1670,6 +1670,18 @@ def scan_disabled_split_lock_mitigation(
     return 0 if value == 0 else None
 
 
+def scan_disabled_cpu_mitigations(cmdline_path="/proc/cmdline"):
+    """Retourne le parametre qui desactive globalement les mitigations CPU."""
+    try:
+        with open(cmdline_path, encoding="utf-8") as cmdline:
+            parameters = cmdline.read().split()
+    except OSError:
+        return None
+    # Le parametre est un token de boot exact. Une valeur absente equivaut a la
+    # politique automatique du kernel ; ne pas faire correspondre une sous-chaine.
+    return "mitigations=off" if "mitigations=off" in parameters else None
+
+
 def audit_kernel():
     m = Module("Kernel & Protections", 14, "CIS 1.6 / ANSSI R14")
     checks = {
@@ -1761,6 +1773,16 @@ def audit_kernel():
             "kernel.split_lock_mitigate = 0. Un utilisateur non privilegie peut multiplier ces verrous couteux et imposer une forte penalite a tout le systeme ; le mode 1 serialise et ralentit les processus fautifs pour reduire ce deni de service.",
             "LOW",
             verify="sysctl kernel.split_lock_mitigate",
+        )
+
+    # Ce parametre unique est un interrupteur global documente par le kernel :
+    # il desactive les protections CPU optionnelles choisies automatiquement.
+    if scan_disabled_cpu_mitigations() == "mitigations=off":
+        m.add(
+            "Mitigations des vulnerabilites CPU desactivees au demarrage",
+            "La ligne de demarrage contient mitigations=off. Ce seul parametre desactive les protections CPU optionnelles contre Spectre, MDS, L1TF, Retbleed et d'autres failles selon le processeur ; le retirer puis verifier chaque etat effectif apres redemarrage.",
+            "HIGH",
+            verify="cat /proc/cmdline; grep -H . /sys/devices/system/cpu/vulnerabilities/* 2>/dev/null",
         )
 
     unsafe_suid_dumps = scan_unsafe_suid_dumps()

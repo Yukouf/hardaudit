@@ -1049,6 +1049,45 @@ class IcmpRedirectSenderTests(unittest.TestCase):
             self.assertTrue(all_value == 1 or interface_value == 1)
 
 
+class CpuMitigationBootPolicyTests(unittest.TestCase):
+    def _cmdline(self, value):
+        cmdline = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        cmdline.write(value + "\n")
+        cmdline.flush()
+        return cmdline
+
+    def test_global_cpu_mitigation_opt_out_is_reported(self):
+        with self._cmdline("BOOT_IMAGE=/vmlinuz quiet mitigations=off audit=1") as cmdline:
+            self.assertEqual(
+                hardaudit.scan_disabled_cpu_mitigations(cmdline.name),
+                "mitigations=off",
+            )
+
+        with patch(
+            "hardaudit.scan_disabled_cpu_mitigations",
+            return_value="mitigations=off",
+        ):
+            findings = [
+                finding for finding in audit_kernel().findings
+                if "CPU" in finding.title and "desactivees" in finding.title
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "HIGH")
+        self.assertIn("Spectre", findings[0].detail)
+
+    def test_default_auto_policy_passes(self):
+        with self._cmdline("BOOT_IMAGE=/vmlinuz root=/dev/vda1 quiet") as cmdline:
+            self.assertIsNone(hardaudit.scan_disabled_cpu_mitigations(cmdline.name))
+
+    def test_similar_but_unrelated_parameter_does_not_match(self):
+        with self._cmdline("foo=mitigations=off mitigations=auto") as cmdline:
+            self.assertIsNone(hardaudit.scan_disabled_cpu_mitigations(cmdline.name))
+
+    def test_live_cmdline_is_read_without_modification(self):
+        result = hardaudit.scan_disabled_cpu_mitigations()
+        self.assertIn(result, (None, "mitigations=off"))
+
+
 class SuidCoreDumpTests(unittest.TestCase):
     def _sysctl(self, value):
         sysctl = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
