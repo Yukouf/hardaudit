@@ -756,6 +756,19 @@ def scan_broadcast_icmp_echo_enabled(
     return value if value == 0 else None
 
 
+def scan_empty_icmp_ratemask(path="/proc/sys/net/ipv4/icmp_ratemask"):
+    """Retourne 0 quand aucun type ICMP n'est soumis aux limiteurs du kernel."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip(), 0)
+    except (OSError, ValueError):
+        return None
+    # icmpv4_mask_allow() laisse immédiatement passer un type dont le bit est
+    # absent. Un masque nul contourne donc les limiteurs global et par cible,
+    # quelles que soient les valeurs de icmp_msgs_per_sec et icmp_ratelimit.
+    return value if value == 0 else None
+
+
 def audit_network(allowed_ports=None):
     m = Module("Reseau & Ports", 12, "CIS 3.x")
     allowed_ports = {str(port) for port in (allowed_ports or set())}
@@ -1022,6 +1035,17 @@ def audit_network(allowed_ports=None):
                 "net.ipv4.icmp_echo_ignore_broadcasts = 0 : Linux repond aux requetes ECHO et TIMESTAMP envoyees en broadcast ou multicast. Une source usurpee peut alors transformer les hotes du segment en amplification vers une victime ; conserver la valeur 1 sauf besoin de diagnostic exceptionnel.",
                 "MEDIUM",
                 verify="sysctl net.ipv4.icmp_echo_ignore_broadcasts",
+            )
+
+        # Les deux limiteurs ICMP ne s'appliquent qu'aux types dont le bit est
+        # present dans icmp_ratemask. Un masque nul les contourne donc tous,
+        # meme si leurs valeurs numeriques semblent restrictives.
+        if scan_empty_icmp_ratemask() == 0:
+            m.add(
+                "Limitation ICMP neutralisee par un masque vide",
+                "net.ipv4.icmp_ratemask = 0 : aucun type ICMP n'est soumis au limiteur global ni au limiteur par destination. Restaurer un masque non nul adapte aux types d'erreur attendus ; la valeur upstream 6168 couvre notamment destination unreachable, time exceeded et parameter problem.",
+                "LOW",
+                verify="sysctl net.ipv4.icmp_ratemask net.ipv4.icmp_msgs_per_sec net.ipv4.icmp_msgs_burst net.ipv4.icmp_ratelimit",
             )
     except Exception as e:
         m.add("Erreur audit reseau", str(e), "MEDIUM")

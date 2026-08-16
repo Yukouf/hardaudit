@@ -108,7 +108,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 |---|---|---|---|
 | Utilisateurs | 12 | CIS 5.x | Root accessible, UID 0 non-root, sudo sans mdp, umask |
 | SSH | 12 | CIS 5.2 / ANSSI R5 | PermitRootLogin, PasswordAuth, X11Forwarding, port |
-| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), refus des routes IPv4 imposées par la source, exceptions d'interface désactivant la politique ou le chiffrement IPsec, blocage optionnel des annonces ARP gratuites sur réseaux statiques, création de voisins depuis des ARP non sollicités (`arp_accept`), en-têtes de routage IPv6 type 2, rejet des annonces de voisin IPv6 non sollicitées sur Wi-Fi, journalisation des sources impossibles, routage inhabituel de `127/8`, refus des paquets usurpant une adresse IPv4 locale, redirects ICMP IPv4/IPv6 et portée réelle de leur confiance (`shared_media` peut neutraliser `secure_redirects`), relais des broadcasts dirigés IPv4, routeurs acceptant encore les annonces IPv6 (`accept_ra=2`), RA dont la source appartient déjà à l'hôte, protection TCP TIME-WAIT contre les RST, randomisation des horodatages TCP et refus des requêtes ICMP broadcast/multicast |
+| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), refus des routes IPv4 imposées par la source, exceptions d'interface désactivant la politique ou le chiffrement IPsec, blocage optionnel des annonces ARP gratuites sur réseaux statiques, création de voisins depuis des ARP non sollicités (`arp_accept`), en-têtes de routage IPv6 type 2, rejet des annonces de voisin IPv6 non sollicitées sur Wi-Fi, journalisation des sources impossibles, routage inhabituel de `127/8`, refus des paquets usurpant une adresse IPv4 locale, redirects ICMP IPv4/IPv6 et portée réelle de leur confiance (`shared_media` peut neutraliser `secure_redirects`), relais des broadcasts dirigés IPv4, routeurs acceptant encore les annonces IPv6 (`accept_ra=2`), RA dont la source appartient déjà à l'hôte, protection TCP TIME-WAIT contre les RST, randomisation des horodatages TCP, refus des requêtes ICMP broadcast/multicast et masque de limitation ICMP non vide |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
 | Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, entropie mmap, décalage aléatoire de la pile kernel à chaque syscall, protections contre les vulnérabilités CPU désactivées par `mitigations=off`, isolation des caches slab, randomisation de l'allocateur de pages, mitigation des split locks x86, détection NMI des blocages CPU durs et détection des tâches bloquées en état D, ptrace, perf_events et limiteur CPU de l'échantillonnage, syncookies (modes `1` et test permanent `2` reconnus), pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés, collecteurs pipe sans borne et chemin du helper root, chemins des helpers privilégiés `kernel.modprobe` et `kernel.hotplug`, répétition illimitée des oops et warnings kernel, segments de mémoire partagée SysV orphelins, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor, exceptions `unconfined` et anciennes ABI de politique, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules chargeables sans signature obligatoire/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
@@ -224,6 +224,10 @@ sysctl net.ipv4.tcp_timestamps
 
 # Requêtes ICMP ECHO/TIMESTAMP broadcast ou multicast : 1 = ignorées
 sysctl net.ipv4.icmp_echo_ignore_broadcasts
+
+# Un masque nul exclut tous les types ICMP des limiteurs global et par destination
+sysctl net.ipv4.icmp_ratemask net.ipv4.icmp_msgs_per_sec \
+  net.ipv4.icmp_msgs_burst net.ipv4.icmp_ratelimit
 
 # Un seul paramètre peut désactiver toutes les mitigations CPU optionnelles
 cat /proc/cmdline
@@ -479,6 +483,8 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 > **Faux positif timestamps TCP :** le mode `2` conserve les timestamps mais retire l'offset aléatoire par connexion, ce qui facilite l'estimation distante de l'uptime. Le mode `1` garde PAWS avec randomisation et constitue le choix normal ; désactiver entièrement les timestamps peut dégrader la protection contre les anciens segments et la mesure RTT.
 
 > **Faux positif ICMP broadcast :** la valeur `0` peut servir à un diagnostic réseau ancien, mais fait répondre Linux aux requêtes ECHO et TIMESTAMP broadcast/multicast. Le finding signale une capacité d'amplification sur le segment local ; les routeurs modernes bloquent généralement les broadcasts dirigés, sans protéger pour autant un réseau local malveillant.
+
+> **Faux positif masque ICMP :** `icmp_ratemask=0` neutralise les deux limiteurs pour tous les types, même si `icmp_msgs_per_sec` et `icmp_ratelimit` affichent des valeurs positives. Un masque personnalisé non nul peut toutefois être légitime : HardAudit ne pénalise que le masque entièrement vide et ne demande pas exactement la valeur upstream `6168`.
 
 > **Faux positif memfd :** des runtimes, navigateurs ou moteurs JIT peuvent légitimement exécuter du code depuis un memfd. Le mode `1` conserve cette possibilité avec `MFD_EXEC` explicite ; le mode `2` la bloque et doit être testé avec les applications avant déploiement.
 

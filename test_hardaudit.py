@@ -2208,6 +2208,30 @@ class KernelSysctlSemanticsTests(unittest.TestCase):
         live = hardaudit.scan_broadcast_icmp_echo_enabled()
         self.assertIn(live, (None, 0))
 
+    def test_empty_icmp_ratemask_disables_all_documented_limits(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
+            policy.write("0\n")
+            policy.flush()
+            self.assertEqual(hardaudit.scan_empty_icmp_ratemask(policy.name), 0)
+
+        with patch("hardaudit.scan_empty_icmp_ratemask", return_value=0):
+            findings = [
+                finding for finding in audit_network().findings
+                if "limitation icmp" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("aucun type", findings[0].detail.lower())
+
+    def test_representative_icmp_ratemask_and_live_policy_are_read_only(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
+            policy.write("6168\n")
+            policy.flush()
+            self.assertIsNone(hardaudit.scan_empty_icmp_ratemask(policy.name))
+
+        live = hardaudit.scan_empty_icmp_ratemask()
+        self.assertIn(live, (None, 0))
+
     def test_disabled_rfc1337_protection_is_reported(self):
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
             policy.write("0\n")
