@@ -1472,6 +1472,38 @@ class IoUringRestrictionTests(unittest.TestCase):
                     self.assertIsNone(scan_unrestricted_io_uring(sysctl.name))
 
 
+class IoUringGroupDelegationTests(unittest.TestCase):
+    def _sysctl(self, value):
+        sysctl = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        sysctl.write(f"{value}\n")
+        sysctl.flush()
+        return sysctl
+
+    def test_mode_one_with_group_is_reported(self):
+        with self._sysctl(1) as policy, self._sysctl(1001) as group:
+            self.assertEqual(
+                hardaudit.scan_io_uring_group_delegation(policy.name, group.name),
+                1001,
+            )
+
+    def test_capability_only_and_global_disable_pass(self):
+        for policy, group in ((1, -1), (2, 1001), (0, 1001)):
+            with self.subTest(policy=policy, group=group):
+                with self._sysctl(policy) as policy_file, self._sysctl(group) as group_file:
+                    self.assertIsNone(hardaudit.scan_io_uring_group_delegation(
+                        policy_file.name, group_file.name
+                    ))
+
+    def test_delegation_is_visible_without_penalizing_intentional_use(self):
+        with patch("hardaudit.scan_io_uring_group_delegation", return_value=1001):
+            findings = [
+                f for f in audit_kernel().findings
+                if "io_uring delegue" in f.title
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "INFO")
+
+
 class AppArmorIoUringMediationTests(unittest.TestCase):
     def _sysctl(self, value):
         sysctl = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")

@@ -292,8 +292,9 @@ sysctl kernel.perf_event_paranoid
 # Limiteur CPU des échantillons perf (0 le désactive ; 1-100 garde le throttling adaptatif)
 sysctl kernel.perf_cpu_time_max_percent
 
-# Création d'instances io_uring (0 = tous, 1 = groupe dédié, 2 = désactivée)
-sysctl kernel.io_uring_disabled
+# Création d'instances io_uring (0 = tous, 1 = CAP_SYS_ADMIN ou GID délégué, 2 = désactivée)
+sysctl kernel.io_uring_disabled kernel.io_uring_group
+getent group "$(cat /proc/sys/kernel/io_uring_group)" 2>/dev/null
 
 # Sur les kernels compatibles : médiation AppArmor de io_uring pour les comptes non privilégiés
 [ ! -e /proc/sys/kernel/apparmor_restrict_unprivileged_io_uring ] || \

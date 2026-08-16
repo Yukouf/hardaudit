@@ -1256,6 +1256,23 @@ def scan_unrestricted_io_uring(path="/proc/sys/kernel/io_uring_disabled"):
     return value if value == 0 else None
 
 
+def scan_io_uring_group_delegation(
+    io_uring_path="/proc/sys/kernel/io_uring_disabled",
+    group_path="/proc/sys/kernel/io_uring_group",
+):
+    """Retourne le GID autorise a creer des io_uring lorsque le mode 1 est actif."""
+    try:
+        with open(io_uring_path, encoding="utf-8") as f:
+            policy = int(f.read().strip())
+        with open(group_path, encoding="utf-8") as f:
+            group_id = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    # En mode 1, -1 reserve la creation a CAP_SYS_ADMIN. Un GID positif est
+    # une delegation explicite qui merite d'etre visible, sans etre penalisee.
+    return group_id if policy == 1 and group_id >= 0 else None
+
+
 def scan_unmediated_unprivileged_io_uring(
     io_uring_path="/proc/sys/kernel/io_uring_disabled",
     apparmor_path="/proc/sys/kernel/apparmor_restrict_unprivileged_io_uring",
@@ -2170,6 +2187,15 @@ def audit_kernel():
                 f"cat {path}; [ ! -e /proc/sys/kernel/apparmor_restrict_unprivileged_io_uring ] "
                 "|| cat /proc/sys/kernel/apparmor_restrict_unprivileged_io_uring"
             ),
+        )
+
+    delegated_io_uring_group = scan_io_uring_group_delegation()
+    if delegated_io_uring_group is not None:
+        m.add(
+            "Acces io_uring delegue a un groupe",
+            f"kernel.io_uring_disabled = 1 mais kernel.io_uring_group = {delegated_io_uring_group}. Les membres de ce GID peuvent encore creer des instances io_uring sans CAP_SYS_ADMIN ; verifier que cette delegation est volontaire et que le groupe reste limite.",
+            "INFO",
+            verify="sysctl kernel.io_uring_disabled kernel.io_uring_group; getent group $(cat /proc/sys/kernel/io_uring_group)",
         )
 
     # Avec 0, les comptes sans CAP_SYS_PTRACE restent limites aux fautes en
