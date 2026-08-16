@@ -722,6 +722,20 @@ def scan_ipv6_local_router_advertisements(root="/proc/sys/net/ipv6/conf"):
     return findings
 
 
+def scan_disabled_invalid_tcp_ratelimit(
+    path="/proc/sys/net/ipv4/tcp_invalid_ratelimit",
+):
+    """Retourne 0 quand les ACK aux segments TCP invalides ne sont pas limites."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    # Toute valeur positive impose un délai minimal en millisecondes entre les
+    # ACK dupliqués. Seul 0 désactive explicitement le limiteur documenté.
+    return value if value == 0 else None
+
+
 def scan_tcp_timewait_assassination(path="/proc/sys/net/ipv4/tcp_rfc1337"):
     """Retourne 0 lorsque les RST peuvent supprimer prématurément TIME-WAIT."""
     try:
@@ -1002,6 +1016,17 @@ def audit_network(allowed_ports=None):
                 f"Interfaces concernees : {interfaces}. Linux refuse normalement une RA dont l'adresse source appartient deja a la machine pour eviter une boucle reseau involontaire ; conserver accept_ra_from_local=1 uniquement pour un montage documente.",
                 "LOW",
                 verify="grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_ra,accept_ra_from_local,forwarding} 2>/dev/null",
+            )
+
+        # Un segment hors fenêtre, un ACK hors fenêtre ou un échec PAWS peut
+        # provoquer un ACK dupliqué. Sans délai, deux extrémités manipulées par
+        # un middlebox peuvent s'entretenir mutuellement dans une boucle d'ACK.
+        if scan_disabled_invalid_tcp_ratelimit() == 0:
+            m.add(
+                "Boucles d'acquittements TCP sans limite",
+                "net.ipv4.tcp_invalid_ratelimit = 0 : les ACK dupliques envoyes en reponse aux segments invalides partent sans limite temporelle. Un middlebox defectueux ou malveillant peut alors entretenir une boucle d'ACK et consommer bande passante et CPU ; utiliser une valeur positive mesuree, 500 ms etant la valeur upstream.",
+                "LOW",
+                verify="sysctl net.ipv4.tcp_invalid_ratelimit",
             )
 
         # Le chemin effectif du kernel supprime l'etat TIME-WAIT sur un RST

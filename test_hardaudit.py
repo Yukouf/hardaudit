@@ -46,6 +46,7 @@ from hardaudit import (
     scan_unsafe_ipv4_redirects,
     scan_unsafe_ipv6_redirects,
     scan_wifi_accepting_unsolicited_ipv6_na,
+    scan_disabled_invalid_tcp_ratelimit,
     scan_tcp_timewait_assassination,
     scan_ipv6_routers_accepting_ra,
     scan_ipv6_local_router_advertisements,
@@ -2184,6 +2185,30 @@ class KernelStackOffsetRandomizationTests(unittest.TestCase):
 
 
 class KernelSysctlSemanticsTests(unittest.TestCase):
+    def test_disabled_invalid_tcp_ratelimit_is_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
+            policy.write("0\n")
+            policy.flush()
+            self.assertEqual(scan_disabled_invalid_tcp_ratelimit(policy.name), 0)
+
+        with patch("hardaudit.scan_disabled_invalid_tcp_ratelimit", return_value=0):
+            findings = [
+                finding for finding in audit_network().findings
+                if "boucles d'acquittements tcp" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("sans limite", findings[0].detail.lower())
+
+    def test_representative_invalid_tcp_ratelimit_and_live_policy_are_read_only(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
+            policy.write("500\n")
+            policy.flush()
+            self.assertIsNone(scan_disabled_invalid_tcp_ratelimit(policy.name))
+
+        live = scan_disabled_invalid_tcp_ratelimit()
+        self.assertIn(live, (None, 0))
+
     def test_broadcast_echo_responses_are_reported(self):
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
             policy.write("0\n")
