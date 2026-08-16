@@ -1896,6 +1896,23 @@ def scan_disabled_hung_task_detector(
     return 0 if value == 0 else None
 
 
+def scan_silent_hung_task_detector(
+    timeout_path="/proc/sys/kernel/hung_task_timeout_secs",
+    warnings_path="/proc/sys/kernel/hung_task_warnings",
+):
+    """Retourne la politique si le detecteur actif n'emet plus d'avertissement."""
+    try:
+        with open(timeout_path, encoding="utf-8") as sysctl:
+            timeout = int(sysctl.read().strip())
+        with open(warnings_path, encoding="utf-8") as sysctl:
+            warnings = int(sysctl.read().strip())
+    except (OSError, ValueError):
+        return None
+    if timeout > 0 and warnings == 0:
+        return timeout, warnings
+    return None
+
+
 def scan_destructive_magic_sysrq(path="/proc/sys/kernel/sysrq"):
     """Retourne les actions SysRq destructrices autorisees depuis le clavier.
 
@@ -2302,6 +2319,18 @@ def audit_kernel():
             "kernel.hung_task_timeout_secs = 0 signifie un delai infini : aucune tache restee en D state n'est signalee. Utiliser un delai positif adapte a la latence normale du stockage, sans activer automatiquement le panic.",
             "LOW",
             verify="sysctl kernel.hung_task_timeout_secs kernel.hung_task_check_interval_secs kernel.hung_task_panic",
+        )
+
+    # Le detecteur peut rester actif tout en devenant silencieux : ce budget est
+    # decremente apres chaque signalement et 0 supprime les avertissements futurs.
+    silent_hung_tasks = scan_silent_hung_task_detector()
+    if silent_hung_tasks is not None:
+        timeout, warnings = silent_hung_tasks
+        m.add(
+            "Alertes de taches bloquees epuisees",
+            f"kernel.hung_task_timeout_secs = {timeout}, mais kernel.hung_task_warnings = {warnings} : le detecteur continue ses controles sans emettre aucun nouvel avertissement. Retablir un budget positif ou -1 apres avoir traite les blocages legitimes.",
+            "LOW",
+            verify="sysctl kernel.hung_task_timeout_secs kernel.hung_task_warnings kernel.hung_task_panic",
         )
 
     destructive_sysrq = scan_destructive_magic_sysrq()

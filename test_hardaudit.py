@@ -1904,11 +1904,49 @@ class HungTaskDetectorTests(unittest.TestCase):
         with self._sysctl(120) as timeout:
             self.assertIsNone(scan_disabled_hung_task_detector(timeout.name))
 
+    def test_zero_warning_budget_silences_an_enabled_detector(self):
+        with self._sysctl(120) as timeout, self._sysctl(0) as warnings:
+            self.assertEqual(
+                hardaudit.scan_silent_hung_task_detector(timeout.name, warnings.name),
+                (120, 0),
+            )
+
+    def test_positive_warning_budget_keeps_alerts_visible(self):
+        with self._sysctl(120) as timeout, self._sysctl(10) as warnings:
+            self.assertIsNone(
+                hardaudit.scan_silent_hung_task_detector(timeout.name, warnings.name)
+            )
+
+    def test_disabled_detector_does_not_receive_a_second_finding(self):
+        with self._sysctl(0) as timeout, self._sysctl(0) as warnings:
+            self.assertIsNone(
+                hardaudit.scan_silent_hung_task_detector(timeout.name, warnings.name)
+            )
+
+    def test_kernel_audit_reports_a_silent_enabled_detector(self):
+        with patch(
+            "hardaudit.scan_silent_hung_task_detector", return_value=(120, 0)
+        ):
+            findings = [
+                finding
+                for finding in audit_kernel().findings
+                if "alertes de taches bloquees" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("aucun nouvel avertissement", findings[0].detail)
+
     def test_live_policy_is_exercised_read_only(self):
-        path = "/proc/sys/kernel/hung_task_timeout_secs"
-        if not os.path.exists(path):
+        timeout_path = "/proc/sys/kernel/hung_task_timeout_secs"
+        warnings_path = "/proc/sys/kernel/hung_task_warnings"
+        if not os.path.exists(timeout_path):
             self.skipTest("ce kernel n'expose pas le detecteur de taches bloquees")
         self.assertIn(scan_disabled_hung_task_detector(), (0, None))
+        if os.path.exists(warnings_path):
+            result = hardaudit.scan_silent_hung_task_detector()
+            self.assertTrue(
+                result is None or (result[0] > 0 and result[1] == 0)
+            )
 
 
 class NullPageMappingTests(unittest.TestCase):
