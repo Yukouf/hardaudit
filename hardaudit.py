@@ -259,6 +259,32 @@ def scan_unsafe_ipv4_source_routing(root="/proc/sys/net/ipv4/conf"):
     return findings
 
 
+def scan_ipv4_ipsec_bypass_interfaces(root="/proc/sys/net/ipv4/conf"):
+    """Liste les interfaces qui désactivent la politique ou les transformations IPsec."""
+    try:
+        interfaces = os.listdir(root)
+    except OSError:
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        # Le loopback utilise couramment ces exceptions et ne reçoit pas de
+        # trafic d'un voisin. all/default sont des modèles, pas des interfaces.
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            values = []
+            for name in ("disable_policy", "disable_xfrm"):
+                with open(os.path.join(root, interface, name), encoding="utf-8") as f:
+                    values.append(int(f.read().strip()))
+        except (OSError, ValueError):
+            continue
+        disable_policy, disable_xfrm = values
+        if disable_policy == 1 or disable_xfrm == 1:
+            findings.append((interface, disable_policy, disable_xfrm))
+    return findings
+
+
 def scan_gratuitous_arp_updates(root="/proc/sys/net/ipv4/conf"):
     """Liste les interfaces qui acceptent encore les annonces ARP gratuites."""
     try:
@@ -706,6 +732,19 @@ def audit_network(allowed_ports=None):
                 f"accept_source_route vaut 1 globalement et sur : {interfaces}. Un paquet peut alors proposer lui-meme une partie de son trajet via l'option SRR ; desactiver sauf besoin de routage historique explicitement documente.",
                 "HIGH",
                 verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/accept_source_route 2>/dev/null",
+            )
+
+        ipsec_bypass = scan_ipv4_ipsec_bypass_interfaces()
+        if ipsec_bypass:
+            interfaces = ", ".join(
+                f"{interface} (policy={disable_policy}, xfrm={disable_xfrm})"
+                for interface, disable_policy, disable_xfrm in ipsec_bypass
+            )
+            m.add(
+                "Exception IPsec active sur une interface IPv4",
+                f"Interfaces concernees : {interfaces}. disable_policy=1 retire la politique SPD et disable_xfrm=1 coupe les transformations IPsec quelle que soit la politique. Ce constat ne prouve pas qu'un tunnel IPsec est configure ; verifier les politiques XFRM et documenter toute exception de conteneur ou de tunnel.",
+                "MEDIUM",
+                verify="grep -H . /proc/sys/net/ipv4/conf/{default,*/}{disable_policy,disable_xfrm} 2>/dev/null; ip -4 xfrm policy; ip -4 xfrm state",
             )
 
         gratuitous_arp = scan_gratuitous_arp_updates()

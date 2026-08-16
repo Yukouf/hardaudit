@@ -108,7 +108,7 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 |---|---|---|---|
 | Utilisateurs | 12 | CIS 5.x | Root accessible, UID 0 non-root, sudo sans mdp, umask |
 | SSH | 12 | CIS 5.2 / ANSSI R5 | PermitRootLogin, PasswordAuth, X11Forwarding, port |
-| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), refus des routes IPv4 imposées par la source, blocage optionnel des annonces ARP gratuites sur réseaux statiques, création de voisins depuis des ARP non sollicités (`arp_accept`), en-têtes de routage IPv6 type 2, journalisation des sources impossibles, routage inhabituel de `127/8`, refus des paquets usurpant une adresse IPv4 locale, redirects ICMP IPv4/IPv6 et portée réelle de leur confiance (`shared_media` peut neutraliser `secure_redirects`), routeurs acceptant encore les annonces IPv6 (`accept_ra=2`), RA dont la source appartient déjà à l'hôte, protection TCP TIME-WAIT contre les RST et refus des requêtes ICMP broadcast/multicast |
+| Réseau | 12 | CIS 3.x | Écoutes wildcard, validation anti-spoofing (`rp_filter`), refus des routes IPv4 imposées par la source, exceptions d'interface désactivant la politique ou le chiffrement IPsec, blocage optionnel des annonces ARP gratuites sur réseaux statiques, création de voisins depuis des ARP non sollicités (`arp_accept`), en-têtes de routage IPv6 type 2, journalisation des sources impossibles, routage inhabituel de `127/8`, refus des paquets usurpant une adresse IPv4 locale, redirects ICMP IPv4/IPv6 et portée réelle de leur confiance (`shared_media` peut neutraliser `secure_redirects`), routeurs acceptant encore les annonces IPv6 (`accept_ra=2`), RA dont la source appartient déjà à l'hôte, protection TCP TIME-WAIT contre les RST et refus des requêtes ICMP broadcast/multicast |
 | Firewall | 12 | CIS 3.5 | UFW/nftables/iptables et politique entrante effective deny/drop |
 | Mises à jour | 10 | CIS 1.8 / ANSSI R3 | Paquets à mettre à jour, unattended-upgrades |
 | Kernel | 14 | CIS 1.6 / ANSSI R14 | ASLR, entropie mmap, décalage aléatoire de la pile kernel à chaque syscall, protections contre les vulnérabilités CPU désactivées par `mitigations=off`, isolation des caches slab, randomisation de l'allocateur de pages, mitigation des split locks x86 et détection NMI des blocages CPU durs, ptrace, perf_events et limiteur CPU de l'échantillonnage, syncookies (modes `1` et test permanent `2` reconnus), pile LSM et présence d'une politique MAC, BPF non privilégié et durcissement du JIT BPF, core dumps privilégiés, collecteurs pipe sans borne et chemin du helper root, chemins des helpers privilégiés `kernel.modprobe` et `kernel.hotplug`, répétition illimitée des oops et warnings kernel, segments de mémoire partagée SysV orphelins, io_uring globalement ouvert et sans médiation AppArmor sur les kernels compatibles, userfaultfd non restreint par sysctl **ou délégué via `/dev/userfaultfd`**, memfd exécutables par défaut, namespaces utilisateur sans médiation AppArmor, exceptions `unconfined` et anciennes ABI de politique, page mémoire nulle, autoload TTY et injection TIOCSTI historique, verrou kexec et limites de chargement des images normales/de crash, modules chargeables sans signature obligatoire/Lockdown, interprètes `binfmt_misc` héritant des privilèges du binaire, masquage des pointeurs kernel (modes renforcés acceptés), protections hardlink/symlink/FIFO/fichiers de `/tmp` |
@@ -163,6 +163,11 @@ grep -H . /proc/sys/net/ipv4/conf/*/rp_filter
 
 # Routes IPv4 proposées par le paquet : global ET interface doivent valoir 1 pour accepter
 grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/accept_source_route 2>/dev/null
+
+# Exceptions IPsec : disable_policy retire la SPD ; disable_xfrm coupe IPsec malgré la politique
+grep -H . /proc/sys/net/ipv4/conf/{default,*/}{disable_policy,disable_xfrm} 2>/dev/null
+ip -4 xfrm policy
+ip -4 xfrm state
 
 # ARP gratuit : "all=1" OU la valeur locale à 1 bloque la mise à jour du cache voisin
 grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/drop_gratuitous_arp 2>/dev/null
@@ -428,6 +433,8 @@ grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/nu
 > **Faux positif rp_filter :** le mode strict `1` peut casser le routage asymétrique ou certains montages multi-interface. Le mode souple `2` vérifie que la source est joignable par une interface et constitue alors le compromis documenté par le kernel ; HardAudit accepte les deux et tient compte du maximum entre `conf/all` et chaque interface.
 
 > **Faux positif source routing IPv4 :** ce mécanisme historique peut subsister dans un laboratoire réseau ou un équipement de test. HardAudit ne le signale que si `conf/all=1` **et** l'interface vaut `1`, condition effective documentée par le kernel ; la valeur `default=1` seule ne rend pas les interfaces existantes vulnérables.
+
+> **Faux positif exceptions IPsec :** `disable_policy=1` ou `disable_xfrm=1` peut être volontaire sur une interface de conteneur, de boucle interne ou gérée par un autre tunnel. HardAudit ignore le loopback, mais signale les autres interfaces car `disable_xfrm=1` coupe explicitement IPsec quelle que soit la politique. Ce finding ne prouve ni qu'un tunnel est actif, ni qu'un paquet a circulé en clair : comparer avec `ip xfrm policy/state` et documenter l'exception avant correction.
 
 > **Faux positif ARP gratuit :** ces annonces sont indispensables à VRRP, aux adresses IP flottantes, à certaines migrations de VM/conteneurs et à la mobilité Wi-Fi. `arp_accept=0` empêche seulement de créer une nouvelle entrée : une entrée voisine existante peut encore être remplacée. Activer `drop_gratuitous_arp=1` uniquement sur une interface de réseau statique où ces mécanismes ne sont pas utilisés.
 

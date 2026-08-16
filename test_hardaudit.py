@@ -37,6 +37,7 @@ from hardaudit import (
     scan_mount_options,
     scan_unlogged_martian_interfaces,
     scan_locally_sourced_ipv4_interfaces,
+    scan_ipv4_ipsec_bypass_interfaces,
     scan_proc_hidepid,
     scan_routed_loopback_interfaces,
     scan_unsafe_ipv4_source_routing,
@@ -362,6 +363,55 @@ class SharedMemoryMountTests(unittest.TestCase):
         if options is None:
             self.skipTest("/dev/shm is not a distinct mount")
         self.assertIn("rw", options)
+
+
+class IPv4IpsecBypassTests(unittest.TestCase):
+    def _write_policy(self, root, interface, disable_policy, disable_xfrm):
+        interface_dir = os.path.join(root, interface)
+        os.makedirs(interface_dir, exist_ok=True)
+        for name, value in (
+            ("disable_policy", disable_policy),
+            ("disable_xfrm", disable_xfrm),
+        ):
+            with open(os.path.join(interface_dir, name), "w", encoding="utf-8") as f:
+                f.write(f"{value}\n")
+
+    def test_detects_non_loopback_interfaces_bypassing_ipsec(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_policy(root, "eth0", 1, 0)
+            self._write_policy(root, "wg0", 0, 1)
+            self._write_policy(root, "lo", 1, 1)
+            self._write_policy(root, "default", 1, 1)
+            self.assertEqual(
+                scan_ipv4_ipsec_bypass_interfaces(root),
+                [("eth0", 1, 0), ("wg0", 0, 1)],
+            )
+
+    def test_representative_default_policy_does_not_bypass_ipsec(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_policy(root, "eth0", 0, 0)
+            self.assertEqual(scan_ipv4_ipsec_bypass_interfaces(root), [])
+
+    def test_network_audit_reports_ipsec_bypass_without_claiming_active_tunnel(self):
+        with patch(
+            "hardaudit.scan_ipv4_ipsec_bypass_interfaces",
+            return_value=[("eth0", 0, 1)],
+        ):
+            findings = [
+                finding for finding in audit_network().findings
+                if "ipsec" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "MEDIUM")
+        self.assertIn("ne prouve pas", findings[0].detail.lower())
+        self.assertIn("disable_xfrm", findings[0].verify)
+
+    def test_live_probe_is_read_only_and_has_known_values(self):
+        for interface, disable_policy, disable_xfrm in scan_ipv4_ipsec_bypass_interfaces():
+            self.assertNotIn(interface, ("all", "default", "lo"))
+            self.assertIn(disable_policy, (0, 1))
+            self.assertIn(disable_xfrm, (0, 1))
+            self.assertTrue(disable_policy or disable_xfrm)
 
 
 class RoutedLoopbackTests(unittest.TestCase):
