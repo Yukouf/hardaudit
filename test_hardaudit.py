@@ -31,6 +31,7 @@ from hardaudit import (
     scan_deleted_executables,
     scan_deleted_executable_mappings,
     scan_fs_link_protections,
+    scan_exposed_kernel_debug_mounts,
     scan_gratuitous_arp_updates,
     scan_unsolicited_arp_learning,
     scan_unicast_ipv4_in_l2_multicast,
@@ -1434,6 +1435,52 @@ class HotplugHelperTests(unittest.TestCase):
         result = hardaudit.scan_enabled_hotplug_helper()
         if result is not None:
             self.assertTrue(result[0])
+
+
+class KernelDebugMountTests(unittest.TestCase):
+    @staticmethod
+    def _mountinfo(path, fs_type="debugfs"):
+        mountinfo = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        escaped = path.replace("\\", "\\134").replace(" ", "\\040")
+        mountinfo.write(f"40 30 0:40 / {escaped} rw,nosuid,nodev,noexec - {fs_type} none rw\n")
+        mountinfo.flush()
+        return mountinfo
+
+    def test_group_accessible_debugfs_is_reported(self):
+        with tempfile.TemporaryDirectory() as root:
+            mountpoint = os.path.join(root, "kernel debug")
+            os.mkdir(mountpoint, 0o750)
+            with self._mountinfo(mountpoint) as mountinfo:
+                self.assertEqual(
+                    scan_exposed_kernel_debug_mounts(mountinfo.name),
+                    [("debugfs", mountpoint, 0o750, os.getuid(), os.getgid())],
+                )
+
+        weak = ("debugfs", "/sys/kernel/debug", 0o750, 0, 100)
+        with patch("hardaudit.scan_exposed_kernel_debug_mounts", return_value=[weak]):
+            findings = [f for f in audit_kernel().findings if "debug kernel" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "MEDIUM")
+        self.assertIn("0700 root:root", findings[0].detail)
+
+    def test_representative_root_only_debug_and_trace_mounts_pass(self):
+        with tempfile.TemporaryDirectory() as root:
+            paths = []
+            lines = []
+            for index, fs_type in enumerate(("debugfs", "tracefs"), start=40):
+                mountpoint = os.path.join(root, fs_type)
+                os.mkdir(mountpoint, 0o700)
+                paths.append(mountpoint)
+                lines.append(f"{index} 30 0:{index} / {mountpoint} rw,nosuid,nodev,noexec - {fs_type} none rw\n")
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as mountinfo:
+                mountinfo.writelines(lines)
+                mountinfo.flush()
+                self.assertEqual(scan_exposed_kernel_debug_mounts(mountinfo.name), [])
+
+    def test_live_debug_mounts_are_exercised_read_only(self):
+        for fs_type, mountpoint, mode, uid, _ in scan_exposed_kernel_debug_mounts():
+            self.assertIn(fs_type, {"debugfs", "tracefs"})
+            self.assertTrue(uid != 0 or mode & 0o077, mountpoint)
 
 
 class OrphanedSysvSharedMemoryTests(unittest.TestCase):

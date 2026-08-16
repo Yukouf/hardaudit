@@ -1263,6 +1263,41 @@ def scan_mount_options(target, mountinfo_path="/proc/self/mountinfo"):
     return None
 
 
+def scan_exposed_kernel_debug_mounts(mountinfo_path="/proc/self/mountinfo"):
+    """Retourne les montages debugfs/tracefs accessibles hors de root."""
+    try:
+        with open(mountinfo_path, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+
+    findings = []
+    seen = set()
+    for line in lines:
+        fields = line.split()
+        try:
+            separator = fields.index("-")
+        except ValueError:
+            continue
+        if len(fields) <= separator + 1 or fields[separator + 1] not in {"debugfs", "tracefs"}:
+            continue
+        mountpoint = (fields[4].replace("\\040", " ").replace("\\011", "\t")
+                      .replace("\\012", "\n").replace("\\134", "\\"))
+        if mountpoint in seen:
+            continue
+        seen.add(mountpoint)
+        try:
+            info = os.stat(mountpoint)
+        except OSError:
+            continue
+        mode = stat.S_IMODE(info.st_mode)
+        # La documentation upstream rend la racine debugfs accessible uniquement
+        # à root par défaut. Tout bit groupe/autres élargit explicitement l'accès.
+        if info.st_uid != 0 or mode & 0o077:
+            findings.append((fields[separator + 1], mountpoint, mode, info.st_uid, info.st_gid))
+    return findings
+
+
 def scan_unsafe_suid_dumps(
     suid_dumpable_path="/proc/sys/fs/suid_dumpable",
     core_pattern_path="/proc/sys/kernel/core_pattern",
@@ -2316,6 +2351,17 @@ def audit_kernel():
             f"{path} = {value} (minimum: {minimum}). Un autre utilisateur peut exploiter un fichier, lien ou FIFO piege dans un repertoire partage.",
             "MEDIUM",
             verify=f"cat {path}",
+        )
+
+    # debugfs et tracefs exposent des interfaces internes du kernel. La racine
+    # debugfs est volontairement root-only par défaut ; une ouverture par mode,
+    # UID ou GID doit donc rester une délégation explicite et étroitement bornée.
+    for fs_type, mountpoint, mode, uid, gid in scan_exposed_kernel_debug_mounts():
+        m.add(
+            "Interface de debug kernel accessible hors de root",
+            f"{fs_type} est monte sur {mountpoint} avec les droits {mode:03o} et appartient a UID {uid}, GID {gid}. Ce pseudo-systeme expose des commandes et donnees internes du kernel ; restaurer une racine 0700 root:root ou documenter strictement le groupe delegue.",
+            "MEDIUM",
+            verify="findmnt -t debugfs,tracefs -o TARGET,FSTYPE,OPTIONS; stat -c '%a %A %U %G %n' /sys/kernel/debug /sys/kernel/tracing",
         )
 
     if scan_unprivileged_bpf() == 0:
