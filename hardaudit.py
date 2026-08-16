@@ -1542,6 +1542,14 @@ def scan_binfmt_credential_entries(root="/proc/sys/fs/binfmt_misc"):
 
 def kernel_sysctl_is_unsafe(name, value, expected=None):
     """Compare un sysctl sans signaler comme faible un mode plus strict."""
+    accepted_values = {
+        # 1 active les cookies en cas de débordement du backlog SYN ; 2 les
+        # génère sans condition pour tester leur impact. Aucun des deux modes
+        # ne signifie que la protection est désactivée.
+        "net.ipv4.tcp_syncookies": {"1", "2"},
+    }
+    if name in accepted_values:
+        return value not in accepted_values[name]
     minimums = {
         "kernel.kptr_restrict": 1,
         "kernel.yama.ptrace_scope": 1,

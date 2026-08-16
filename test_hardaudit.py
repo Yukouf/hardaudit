@@ -2107,6 +2107,36 @@ class KernelSysctlSemanticsTests(unittest.TestCase):
     def test_representative_ubuntu_perf_lockdown_is_accepted(self):
         self.assertFalse(kernel_sysctl_is_unsafe("kernel.perf_event_paranoid", "4"))
 
+    def test_disabled_tcp_syncookies_are_rejected(self):
+        self.assertTrue(kernel_sysctl_is_unsafe("net.ipv4.tcp_syncookies", "0"))
+
+    def test_unconditional_tcp_syncookies_are_not_reported_as_disabled(self):
+        self.assertFalse(kernel_sysctl_is_unsafe("net.ipv4.tcp_syncookies", "2"))
+
+    def test_live_tcp_syncookies_policy_is_interpreted_read_only(self):
+        with open("/proc/sys/net/ipv4/tcp_syncookies", encoding="utf-8") as policy:
+            value = policy.read().strip()
+        self.assertIn(value, ("0", "1", "2"))
+        self.assertEqual(
+            kernel_sysctl_is_unsafe("net.ipv4.tcp_syncookies", value),
+            value == "0",
+        )
+
+    def test_unconditional_tcp_syncookies_do_not_emit_disabled_finding(self):
+        real_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if path == "/proc/sys/net/ipv4/tcp_syncookies":
+                return StringIO("2\n")
+            return real_open(path, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=fake_open):
+            findings = [
+                finding for finding in audit_kernel().findings
+                if "TCP syncookies" in finding.title
+            ]
+        self.assertEqual(findings, [])
+
     def test_perf_finding_is_emitted_for_weak_value(self):
         real_open = open
 
