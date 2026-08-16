@@ -736,6 +736,21 @@ def scan_disabled_invalid_tcp_ratelimit(
     return value if value == 0 else None
 
 
+def scan_tcp_challenge_ack_side_channel(
+    path="/proc/sys/net/ipv4/tcp_challenge_ack_limit",
+):
+    """Retourne une limite globale de Challenge ACK active dans le netns."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    # La documentation kernel déconseille ce budget partagé par namespace :
+    # son épuisement est observable et crée un canal auxiliaire. INT_MAX est la
+    # valeur upstream « unlimited » ; les limites par socket restent actives.
+    return value if 0 <= value < 2147483647 else None
+
+
 def scan_tcp_timewait_assassination(path="/proc/sys/net/ipv4/tcp_rfc1337"):
     """Retourne 0 lorsque les RST peuvent supprimer prématurément TIME-WAIT."""
     try:
@@ -1027,6 +1042,19 @@ def audit_network(allowed_ports=None):
                 "net.ipv4.tcp_invalid_ratelimit = 0 : les ACK dupliques envoyes en reponse aux segments invalides partent sans limite temporelle. Un middlebox defectueux ou malveillant peut alors entretenir une boucle d'ACK et consommer bande passante et CPU ; utiliser une valeur positive mesuree, 500 ms etant la valeur upstream.",
                 "LOW",
                 verify="sysctl net.ipv4.tcp_invalid_ratelimit",
+            )
+
+        challenge_ack_limit = scan_tcp_challenge_ack_side_channel()
+        if challenge_ack_limit is not None:
+            zero_note = (
+                " La valeur 0 supprime aussi les Challenge ACK protecteurs."
+                if challenge_ack_limit == 0 else ""
+            )
+            m.add(
+                "Budget partage de Challenge ACK TCP actif",
+                f"net.ipv4.tcp_challenge_ack_limit = {challenge_ack_limit} : ce quota par namespace est observable lorsqu'il est epuise et peut servir de canal auxiliaire a une attaque TCP hors chemin.{zero_note} Le kernel recommande INT_MAX (2147483647), car les limites par socket restent appliquees.",
+                "LOW",
+                verify="sysctl net.ipv4.tcp_challenge_ack_limit",
             )
 
         # Le chemin effectif du kernel supprime l'etat TIME-WAIT sur un RST

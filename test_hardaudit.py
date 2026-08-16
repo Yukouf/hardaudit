@@ -47,6 +47,7 @@ from hardaudit import (
     scan_unsafe_ipv6_redirects,
     scan_wifi_accepting_unsolicited_ipv6_na,
     scan_disabled_invalid_tcp_ratelimit,
+    scan_tcp_challenge_ack_side_channel,
     scan_tcp_timewait_assassination,
     scan_ipv6_routers_accepting_ra,
     scan_ipv6_local_router_advertisements,
@@ -2185,6 +2186,30 @@ class KernelStackOffsetRandomizationTests(unittest.TestCase):
 
 
 class KernelSysctlSemanticsTests(unittest.TestCase):
+    def test_shared_tcp_challenge_ack_limit_is_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
+            policy.write("1000\n")
+            policy.flush()
+            self.assertEqual(scan_tcp_challenge_ack_side_channel(policy.name), 1000)
+
+        with patch("hardaudit.scan_tcp_challenge_ack_side_channel", return_value=1000):
+            findings = [
+                finding for finding in audit_network().findings
+                if "challenge ack" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("canal auxiliaire", findings[0].detail.lower())
+
+    def test_representative_unlimited_challenge_ack_policy_and_live_value(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
+            policy.write("2147483647\n")
+            policy.flush()
+            self.assertIsNone(scan_tcp_challenge_ack_side_channel(policy.name))
+
+        live = scan_tcp_challenge_ack_side_channel()
+        self.assertTrue(live is None or 0 <= live < 2147483647)
+
     def test_disabled_invalid_tcp_ratelimit_is_reported(self):
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
             policy.write("0\n")
