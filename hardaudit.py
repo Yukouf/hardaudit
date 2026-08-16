@@ -1724,6 +1724,22 @@ def scan_slab_cache_merging(config_path=None, cmdline_path="/proc/cmdline"):
     return True
 
 
+def scan_disabled_page_allocator_shuffle(
+    path="/sys/module/page_alloc/parameters/shuffle",
+):
+    """Retourne l'etat si la randomisation des pages est disponible mais inactive.
+
+    Le fichier runtime n'existe que lorsque le kernel expose cette fonctionnalite.
+    Son absence reste donc inconnue plutot que d'etre assimilee a une faiblesse.
+    """
+    try:
+        with open(path, encoding="utf-8") as status:
+            value = status.read().strip()
+    except OSError:
+        return None
+    return value if value.lower() in ("n", "0", "false", "off") else None
+
+
 def scan_disabled_split_lock_mitigation(
     path="/proc/sys/kernel/split_lock_mitigate",
 ):
@@ -1828,6 +1844,19 @@ def audit_kernel():
             "CONFIG_SLAB_MERGE_DEFAULT est actif et slab_nomerge est absent de la ligne de demarrage. Des objets de sous-systemes differents peuvent partager un cache ; slab_nomerge reduit la plupart des effets d'une attaque heap a son cache d'origine, avec un cout memoire et de cache CPU.",
             "LOW",
             verify="grep '^CONFIG_SLAB_MERGE_DEFAULT=' /boot/config-$(uname -r); cat /proc/cmdline; find /sys/kernel/slab -maxdepth 1 -type l | head",
+        )
+
+    # Le kernel décrit ce mélange comme une optimisation de cache ayant aussi
+    # un bénéfice de sécurité : les pages physiques deviennent moins prévisibles.
+    # Il reste désactivé par défaut sans cache mémoire direct, car le forcer peut
+    # pénaliser certaines charges ; le finding est donc informatif et contextuel.
+    page_shuffle = scan_disabled_page_allocator_shuffle()
+    if page_shuffle is not None:
+        m.add(
+            "Randomisation des pages memoire disponible mais inactive",
+            f"/sys/module/page_alloc/parameters/shuffle = {page_shuffle}. La predictibilite des listes de pages libres reste plus forte ; page_alloc.shuffle=1 complete la randomisation slab, mais peut degrader les performances sur une plateforme sans cache memoire direct.",
+            "LOW",
+            verify="cat /sys/module/page_alloc/parameters/shuffle; grep '^CONFIG_SHUFFLE_PAGE_ALLOCATOR=' /boot/config-$(uname -r); cat /proc/cmdline",
         )
 
     # Sur x86, un split lock peut verrouiller le bus et penaliser tous les CPU.

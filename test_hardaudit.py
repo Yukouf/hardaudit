@@ -2284,5 +2284,42 @@ class SlabCacheMergingTests(unittest.TestCase):
         self.assertIn(hardaudit.scan_slab_cache_merging(), (None, True))
 
 
+class PageAllocatorShuffleTests(unittest.TestCase):
+    def _file(self, content):
+        handle = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        handle.write(content)
+        handle.flush()
+        return handle
+
+    def test_available_but_disabled_page_shuffle_is_reported(self):
+        with self._file("N\n") as status:
+            self.assertEqual(
+                hardaudit.scan_disabled_page_allocator_shuffle(status.name),
+                "N",
+            )
+
+        with patch(
+            "hardaudit.scan_disabled_page_allocator_shuffle", return_value="N"
+        ):
+            findings = [
+                finding for finding in audit_kernel().findings
+                if "pages memoire" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("predictibilite", findings[0].detail)
+
+    def test_representative_enabled_page_shuffle_passes(self):
+        for value in ("Y\n", "1\n", "y\n"):
+            with self.subTest(value=value), self._file(value) as status:
+                self.assertIsNone(
+                    hardaudit.scan_disabled_page_allocator_shuffle(status.name)
+                )
+
+    def test_live_page_shuffle_state_is_exercised_read_only(self):
+        result = hardaudit.scan_disabled_page_allocator_shuffle()
+        self.assertIn(result, (None, "N", "0", "n"))
+
+
 if __name__ == "__main__":
     unittest.main()
