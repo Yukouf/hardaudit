@@ -63,6 +63,7 @@ from hardaudit import (
     scan_unconfined_userns_exception,
     scan_unlimited_kernel_oopses,
     scan_unlimited_kernel_warnings,
+    scan_disabled_hard_lockup_detector,
     scan_destructive_magic_sysrq,
     scan_orphaned_sysv_shared_memory,
     scan_suboptimal_aslr_entropy,
@@ -1623,6 +1624,33 @@ class AppArmorUserNamespaceRestrictionTests(unittest.TestCase):
             hardaudit.scan_legacy_apparmor_userns_bypass(),
             ((1, 1, 0), None),
         )
+
+
+class HardLockupDetectorTests(unittest.TestCase):
+    def _sysctl(self, value):
+        sysctl = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        sysctl.write(f"{value}\n")
+        sysctl.flush()
+        return sysctl
+
+    def test_disabled_nmi_watchdog_is_reported(self):
+        with self._sysctl(0) as nmi:
+            self.assertEqual(scan_disabled_hard_lockup_detector(nmi.name), 0)
+
+        with patch("hardaudit.scan_disabled_hard_lockup_detector", return_value=0):
+            findings = [f for f in audit_kernel().findings if "hard lockup" in f.title.lower()]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("NMI", findings[0].detail)
+
+    def test_enabled_nmi_watchdog_passes(self):
+        with self._sysctl(1) as nmi:
+            self.assertIsNone(scan_disabled_hard_lockup_detector(nmi.name))
+
+    def test_live_kernel_policy_is_exercised_read_only(self):
+        if not os.path.exists("/proc/sys/kernel/nmi_watchdog"):
+            self.skipTest("ce kernel n'expose pas le NMI watchdog")
+        self.assertIn(scan_disabled_hard_lockup_detector(), (0, None))
 
 
 class NullPageMappingTests(unittest.TestCase):

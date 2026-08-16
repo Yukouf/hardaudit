@@ -1604,6 +1604,18 @@ def scan_unlimited_kernel_warnings(
     return None
 
 
+def scan_disabled_hard_lockup_detector(
+    path="/proc/sys/kernel/nmi_watchdog",
+):
+    """Retourne 0 si le detecteur NMI des blocages CPU durs est desactive."""
+    try:
+        with open(path, encoding="utf-8") as sysctl:
+            value = int(sysctl.read().strip())
+    except (OSError, ValueError):
+        return None
+    return 0 if value == 0 else None
+
+
 def scan_destructive_magic_sysrq(path="/proc/sys/kernel/sysrq"):
     """Retourne les actions SysRq destructrices autorisees depuis le clavier.
 
@@ -1988,6 +2000,17 @@ def audit_kernel():
             "kernel.panic_on_warn = 0 et kernel.warn_limit = 0. La valeur 0 signifie compteur desactive : aucune accumulation de WARN ne declenchera de panic. Utiliser une borne positive dimensionnee apres avoir corrige les warnings legitimes ; panic_on_warn=1 peut transformer le premier bug en indisponibilite.",
             "LOW",
             verify="sysctl kernel.panic_on_warn kernel.warn_limit",
+        )
+
+    # kernel.watchdog est un OU logique : il peut afficher 1 uniquement parce
+    # que le detecteur soft est actif. Seul nmi_watchdog confirme le detecteur
+    # hard, capable d'interrompre un CPU qui ne traite plus les timers normaux.
+    if scan_disabled_hard_lockup_detector() == 0:
+        m.add(
+            "Detecteur de hard lockup CPU desactive",
+            "kernel.nmi_watchdog = 0. Le watchdog soft peut rester actif et faire afficher kernel.watchdog = 1, mais il depend encore des interruptions timer ; seul le watchdog NMI detecte un CPU completement bloque. L'activer apres validation des compteurs de performance et de l'hyperviseur.",
+            "LOW",
+            verify="sysctl kernel.watchdog kernel.soft_watchdog kernel.nmi_watchdog",
         )
 
     destructive_sysrq = scan_destructive_magic_sysrq()
