@@ -401,6 +401,36 @@ def scan_unsafe_ipv6_source_routing(root="/proc/sys/net/ipv6/conf"):
     return findings
 
 
+def scan_unauthenticated_srv6_interfaces(root="/proc/sys/net/ipv6/conf"):
+    """Liste les interfaces acceptant des paquets SRv6 sans HMAC obligatoire."""
+    try:
+        interfaces = os.listdir(root)
+    except OSError:
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        # Ces réglages sont propres à chaque interface. "all" et "default"
+        # ne prouvent pas qu'un paquet est accepté, et le loopback n'est pas une
+        # surface réseau distante.
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            with open(os.path.join(root, interface, "seg6_enabled"), encoding="utf-8") as f:
+                enabled = int(f.read().strip())
+            with open(
+                os.path.join(root, interface, "seg6_require_hmac"), encoding="utf-8"
+            ) as f:
+                hmac_policy = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        # La documentation upstream définit toute valeur non nulle comme active.
+        # Seul le mode HMAC 1 refuse les paquets SRv6 dépourvus de HMAC.
+        if enabled != 0 and hmac_policy != 1:
+            findings.append((interface, enabled, hmac_policy))
+    return findings
+
+
 def scan_wifi_accepting_unsolicited_ipv6_na(
     sysctl_root="/proc/sys/net/ipv6/conf",
     net_root="/sys/class/net",
@@ -932,6 +962,19 @@ def audit_network(allowed_ports=None):
                 f"accept_source_route est non negatif globalement et sur : {interfaces}. Linux refuse les autres types mais accepte encore le type 2 lie a Mobile IPv6 ; passer la politique globale ou locale a -1 sauf besoin documente.",
                 "MEDIUM",
                 verify="grep -H . /proc/sys/net/ipv6/conf/{all,default,*}/accept_source_route 2>/dev/null",
+            )
+
+        unauthenticated_srv6 = scan_unauthenticated_srv6_interfaces()
+        if unauthenticated_srv6:
+            interfaces = ", ".join(
+                f"{interface} (HMAC={hmac_policy})"
+                for interface, _, hmac_policy in unauthenticated_srv6
+            )
+            m.add(
+                "Paquets SRv6 acceptes sans HMAC obligatoire",
+                f"Interfaces concernees : {interfaces}. seg6_enabled accepte les paquets IPv6 avec Segment Routing Header destines a l'hote, tandis que seg6_require_hmac != 1 laisse aussi passer ceux sans HMAC. Desactiver SRv6 si inutile, ou exiger le HMAC apres validation des pairs et des cles.",
+                "LOW",
+                verify="grep -H . /proc/sys/net/ipv6/conf/{default,*/}/{seg6_enabled,seg6_require_hmac} 2>/dev/null; ip -6 route show",
             )
 
         wifi_unsolicited_na = scan_wifi_accepting_unsolicited_ipv6_na()

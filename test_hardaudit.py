@@ -46,6 +46,7 @@ from hardaudit import (
     scan_unsafe_ipv4_redirect_senders,
     scan_unsafe_ipv4_redirects,
     scan_unsafe_ipv6_redirects,
+    scan_unauthenticated_srv6_interfaces,
     scan_wifi_accepting_unsolicited_ipv6_na,
     scan_ipv6_routers_learning_untracked_neighbors,
     scan_disabled_invalid_tcp_ratelimit,
@@ -780,6 +781,55 @@ class IPv6SourceRoutingTests(unittest.TestCase):
         findings = hardaudit.scan_unsafe_ipv6_source_routing(root)
         self.assertTrue(all(global_value >= 0 and local_value >= 0
                             for _, global_value, local_value in findings))
+
+
+class SRv6IngressPolicyTests(unittest.TestCase):
+    def _write_interface(self, root, interface, enabled, hmac_policy):
+        policy = os.path.join(root, interface)
+        os.makedirs(policy)
+        for name, value in (
+            ("seg6_enabled", enabled),
+            ("seg6_require_hmac", hmac_policy),
+        ):
+            with open(os.path.join(policy, name), "w", encoding="utf-8") as f:
+                f.write(f"{value}\n")
+
+    def test_reports_only_network_interfaces_accepting_srv6_without_required_hmac(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_interface(root, "all", 1, 0)
+            self._write_interface(root, "default", 1, 0)
+            self._write_interface(root, "lo", 1, 0)
+            self._write_interface(root, "eth0", 1, 0)
+            self._write_interface(root, "eth1", 1, -1)
+            self._write_interface(root, "eth2", 1, 1)
+            self._write_interface(root, "eth3", 0, 0)
+            self.assertEqual(
+                scan_unauthenticated_srv6_interfaces(root),
+                [("eth0", 1, 0), ("eth1", 1, -1)],
+            )
+
+        with patch(
+            "hardaudit.scan_unauthenticated_srv6_interfaces",
+            return_value=[("eth0", 1, 0)],
+        ):
+            findings = [
+                finding for finding in audit_network().findings
+                if "srv6" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("eth0", findings[0].detail)
+        self.assertIn("sans HMAC", findings[0].title)
+
+    def test_representative_live_policy_is_exercised_read_only(self):
+        root = "/proc/sys/net/ipv6/conf"
+        if not os.path.exists(os.path.join(root, "all", "seg6_enabled")):
+            self.skipTest("SRv6 ingress policy is not exposed by this kernel")
+        findings = scan_unauthenticated_srv6_interfaces(root)
+        for interface, enabled, hmac_policy in findings:
+            self.assertNotIn(interface, ("all", "default", "lo"))
+            self.assertNotEqual(enabled, 0)
+            self.assertNotEqual(hmac_policy, 1)
 
 
 class WifiUnsolicitedIPv6NeighborAdvertisementTests(unittest.TestCase):
