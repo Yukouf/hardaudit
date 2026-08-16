@@ -675,6 +675,18 @@ def scan_tcp_timewait_assassination(path="/proc/sys/net/ipv4/tcp_rfc1337"):
     return value if value == 0 else None
 
 
+def scan_tcp_timestamp_uptime_leak(path="/proc/sys/net/ipv4/tcp_timestamps"):
+    """Retourne 2 lorsque les timestamps TCP sont émis sans offset aléatoire."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    # Le mode 1 randomise l'origine par connexion. Le mode 2 conserve les
+    # timestamps mais retire cet offset ; 0 désactive entièrement l'option.
+    return value if value == 2 else None
+
+
 def scan_broadcast_icmp_echo_enabled(
     path="/proc/sys/net/ipv4/icmp_echo_ignore_broadcasts",
 ):
@@ -911,6 +923,17 @@ def audit_network(allowed_ports=None):
                 "net.ipv4.tcp_rfc1337 = 0 : un RST valide peut supprimer prematurement l'etat TIME-WAIT et laisser d'anciens segments perturber une connexion reutilisant les memes adresses et ports. Le mode 1 conserve TIME-WAIT face a ce RST.",
                 "LOW",
                 verify="sysctl net.ipv4.tcp_rfc1337",
+            )
+
+        # tcp_timestamps=2 n'est pas un mode « renforcé » : il conserve les
+        # timestamps RFC 1323 mais retire l'offset aléatoire propre à chaque
+        # connexion, ce qui facilite l'estimation distante de l'uptime.
+        if scan_tcp_timestamp_uptime_leak() == 2:
+            m.add(
+                "Horodatages TCP emis sans randomisation",
+                "net.ipv4.tcp_timestamps = 2 : Linux emet les horodatages TCP sans decalage aleatoire par connexion, ce qui facilite l'estimation distante de l'uptime et le fingerprinting. Utiliser 1 pour conserver PAWS avec randomisation, sauf besoin de diagnostic documente.",
+                "LOW",
+                verify="sysctl net.ipv4.tcp_timestamps",
             )
 
         # La documentation kernel confirme que le mode 1 ignore les requêtes

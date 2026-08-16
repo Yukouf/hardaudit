@@ -2134,6 +2134,30 @@ class KernelSysctlSemanticsTests(unittest.TestCase):
         live = scan_tcp_timewait_assassination()
         self.assertIn(live, (None, 0))
 
+    def test_tcp_timestamps_without_random_offsets_are_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
+            policy.write("2\n")
+            policy.flush()
+            self.assertEqual(hardaudit.scan_tcp_timestamp_uptime_leak(policy.name), 2)
+
+        with patch("hardaudit.scan_tcp_timestamp_uptime_leak", return_value=2):
+            findings = [
+                finding for finding in audit_network().findings
+                if "horodatages tcp" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("sans decalage aleatoire", findings[0].detail)
+
+    def test_randomized_tcp_timestamps_and_live_policy_are_exercised_read_only(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
+            policy.write("1\n")
+            policy.flush()
+            self.assertIsNone(hardaudit.scan_tcp_timestamp_uptime_leak(policy.name))
+
+        live = hardaudit.scan_tcp_timestamp_uptime_leak()
+        self.assertIn(live, (None, 2))
+
     def test_aslr_entropy_below_architecture_maximum_is_reported(self):
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as bits, \
                 tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as compat, \
