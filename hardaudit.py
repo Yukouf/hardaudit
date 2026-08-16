@@ -430,6 +430,39 @@ def scan_wifi_accepting_unsolicited_ipv6_na(
     return findings
 
 
+def scan_ipv6_routers_learning_untracked_neighbors(
+    root="/proc/sys/net/ipv6/conf",
+):
+    """Liste les routeurs IPv6 apprenant des voisins absents de leur cache."""
+    try:
+        interfaces = os.listdir(root)
+    except OSError:
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            values = {}
+            for name in ("accept_untracked_na", "forwarding", "drop_unsolicited_na"):
+                with open(os.path.join(root, interface, name), encoding="utf-8") as f:
+                    values[name] = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+
+        # Ce mécanisme est destiné aux routeurs RFC 9131. La documentation du
+        # kernel donne à drop_unsolicited_na une priorité supérieure : si ce
+        # dernier vaut 1, le mode d'apprentissage n'est pas effectif.
+        if (
+            values["forwarding"] == 1
+            and values["accept_untracked_na"] in (1, 2)
+            and values["drop_unsolicited_na"] == 0
+        ):
+            findings.append((interface, values["accept_untracked_na"]))
+    return findings
+
+
 def scan_unlogged_martian_interfaces(root="/proc/sys/net/ipv4/conf"):
     """Liste les interfaces qui ne journalisent pas les paquets aux sources impossibles."""
     try:
@@ -909,6 +942,19 @@ def audit_network(allowed_ports=None):
                 f"Interfaces concernees : {interfaces}. Le kernel recommande de jeter ces Neighbor Advertisements sur 802.11 pour empecher qu'un voisin injecte une association IPv6/MAC non sollicitee. Activer drop_unsolicited_na uniquement sur les interfaces Wi-Fi apres verification des proxies NDP ou mecanismes HA.",
                 "LOW",
                 verify="for i in /sys/class/net/*/wireless; do n=${i%/wireless}; n=${n##*/}; grep -H . /proc/sys/net/ipv6/conf/$n/drop_unsolicited_na; done",
+            )
+
+        untracked_ipv6_neighbors = scan_ipv6_routers_learning_untracked_neighbors()
+        if untracked_ipv6_neighbors:
+            interfaces = ", ".join(
+                f"{interface} (mode {mode})"
+                for interface, mode in untracked_ipv6_neighbors
+            )
+            m.add(
+                "Apprentissage de voisins IPv6 absents du cache",
+                f"Interfaces routeur concernees : {interfaces}. accept_untracked_na autorise une Neighbor Advertisement, meme non sollicitee, a creer une entree STALE qui n'existait pas ; le mode 2 exige au moins une source du meme sous-reseau. Conserver 0 sauf optimisation RFC 9131 documentee avec ndisc_notify ; drop_unsolicited_na=1 neutralise ce mecanisme.",
+                "LOW",
+                verify="grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_untracked_na,drop_unsolicited_na,forwarding} 2>/dev/null; ip -6 neigh show",
             )
 
         unlogged_martians = scan_unlogged_martian_interfaces()

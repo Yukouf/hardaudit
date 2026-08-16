@@ -47,6 +47,7 @@ from hardaudit import (
     scan_unsafe_ipv4_redirects,
     scan_unsafe_ipv6_redirects,
     scan_wifi_accepting_unsolicited_ipv6_na,
+    scan_ipv6_routers_learning_untracked_neighbors,
     scan_disabled_invalid_tcp_ratelimit,
     scan_tcp_challenge_ack_side_channel,
     scan_tcp_timewait_assassination,
@@ -823,6 +824,64 @@ class WifiUnsolicitedIPv6NeighborAdvertisementTests(unittest.TestCase):
         self.assertTrue(all(value == 0 for _, value in findings))
         for interface, _ in findings:
             self.assertTrue(os.path.isdir(os.path.join("/sys/class/net", interface, "wireless")))
+
+
+class IPv6UntrackedNeighborAdvertisementTests(unittest.TestCase):
+    def _write_interface(
+        self, root, interface, accept_untracked_na, forwarding, drop_unsolicited_na=0
+    ):
+        policy = os.path.join(root, interface)
+        os.makedirs(policy)
+        for name, value in (
+            ("accept_untracked_na", accept_untracked_na),
+            ("forwarding", forwarding),
+            ("drop_unsolicited_na", drop_unsolicited_na),
+        ):
+            with open(os.path.join(policy, name), "w", encoding="utf-8") as f:
+                f.write(f"{value}\n")
+
+    def test_reports_only_routers_learning_untracked_neighbors(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_interface(root, "all", 0, 1)
+            self._write_interface(root, "default", 0, 1)
+            self._write_interface(root, "lo", 1, 1)
+            self._write_interface(root, "eth0", 1, 1)
+            self._write_interface(root, "eth1", 2, 1)
+            self._write_interface(root, "eth2", 1, 0)
+            self._write_interface(root, "eth3", 0, 1)
+            self._write_interface(root, "eth4", 1, 1, drop_unsolicited_na=1)
+            self.assertEqual(
+                scan_ipv6_routers_learning_untracked_neighbors(root),
+                [("eth0", 1), ("eth1", 2)],
+            )
+
+        with patch(
+            "hardaudit.scan_ipv6_routers_learning_untracked_neighbors",
+            return_value=[("eth0", 1), ("eth1", 2)],
+        ):
+            findings = [
+                finding for finding in audit_network().findings
+                if "voisins ipv6 absents" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("eth0 (mode 1)", findings[0].detail)
+        self.assertIn("eth1 (mode 2)", findings[0].detail)
+
+    def test_representative_live_policy_is_exercised_read_only(self):
+        root = "/proc/sys/net/ipv6/conf"
+        if not os.path.exists(os.path.join(root, "all", "accept_untracked_na")):
+            self.skipTest("IPv6 accept_untracked_na is not exposed by this kernel")
+        findings = scan_ipv6_routers_learning_untracked_neighbors(root)
+        for interface, mode in findings:
+            self.assertNotIn(interface, ("all", "default", "lo"))
+            self.assertIn(mode, (1, 2))
+            with open(os.path.join(root, interface, "forwarding"), encoding="utf-8") as f:
+                self.assertEqual(f.read().strip(), "1")
+            with open(
+                os.path.join(root, interface, "drop_unsolicited_na"), encoding="utf-8"
+            ) as f:
+                self.assertEqual(f.read().strip(), "0")
 
 
 class MartianPacketLoggingTests(unittest.TestCase):
