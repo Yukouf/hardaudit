@@ -65,6 +65,7 @@ from hardaudit import (
     scan_unlimited_kernel_oopses,
     scan_unlimited_kernel_warnings,
     scan_disabled_hard_lockup_detector,
+    scan_disabled_hung_task_detector,
     scan_destructive_magic_sysrq,
     scan_orphaned_sysv_shared_memory,
     scan_suboptimal_aslr_entropy,
@@ -1701,6 +1702,34 @@ class HardLockupDetectorTests(unittest.TestCase):
         if not os.path.exists("/proc/sys/kernel/nmi_watchdog"):
             self.skipTest("ce kernel n'expose pas le NMI watchdog")
         self.assertIn(scan_disabled_hard_lockup_detector(), (0, None))
+
+
+class HungTaskDetectorTests(unittest.TestCase):
+    def _sysctl(self, value):
+        sysctl = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        sysctl.write(f"{value}\n")
+        sysctl.flush()
+        return sysctl
+
+    def test_infinite_timeout_disables_detection_and_is_reported(self):
+        with self._sysctl(0) as timeout:
+            self.assertEqual(scan_disabled_hung_task_detector(timeout.name), 0)
+
+        with patch("hardaudit.scan_disabled_hung_task_detector", return_value=0):
+            findings = [f for f in audit_kernel().findings if "tache bloquee" in f.title.lower()]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("D state", findings[0].detail)
+
+    def test_positive_timeout_keeps_detection_enabled(self):
+        with self._sysctl(120) as timeout:
+            self.assertIsNone(scan_disabled_hung_task_detector(timeout.name))
+
+    def test_live_policy_is_exercised_read_only(self):
+        path = "/proc/sys/kernel/hung_task_timeout_secs"
+        if not os.path.exists(path):
+            self.skipTest("ce kernel n'expose pas le detecteur de taches bloquees")
+        self.assertIn(scan_disabled_hung_task_detector(), (0, None))
 
 
 class NullPageMappingTests(unittest.TestCase):

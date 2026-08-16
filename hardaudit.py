@@ -1655,6 +1655,18 @@ def scan_disabled_hard_lockup_detector(
     return 0 if value == 0 else None
 
 
+def scan_disabled_hung_task_detector(
+    path="/proc/sys/kernel/hung_task_timeout_secs",
+):
+    """Retourne 0 si le delai infini desactive la detection des taches bloquees."""
+    try:
+        with open(path, encoding="utf-8") as sysctl:
+            value = int(sysctl.read().strip())
+    except (OSError, ValueError):
+        return None
+    return 0 if value == 0 else None
+
+
 def scan_destructive_magic_sysrq(path="/proc/sys/kernel/sysrq"):
     """Retourne les actions SysRq destructrices autorisees depuis le clavier.
 
@@ -2050,6 +2062,17 @@ def audit_kernel():
             "kernel.nmi_watchdog = 0. Le watchdog soft peut rester actif et faire afficher kernel.watchdog = 1, mais il depend encore des interruptions timer ; seul le watchdog NMI detecte un CPU completement bloque. L'activer apres validation des compteurs de performance et de l'hyperviseur.",
             "LOW",
             verify="sysctl kernel.watchdog kernel.soft_watchdog kernel.nmi_watchdog",
+        )
+
+    # Le zero n'est pas une detection immediate : la documentation kernel le
+    # definit comme un delai infini, donc aucune tache bloquee en D state n'est
+    # recherchee. Ce detecteur complete le watchdog des blocages CPU.
+    if scan_disabled_hung_task_detector() == 0:
+        m.add(
+            "Detecteur de tache bloquee desactive",
+            "kernel.hung_task_timeout_secs = 0 signifie un delai infini : aucune tache restee en D state n'est signalee. Utiliser un delai positif adapte a la latence normale du stockage, sans activer automatiquement le panic.",
+            "LOW",
+            verify="sysctl kernel.hung_task_timeout_secs kernel.hung_task_check_interval_secs kernel.hung_task_panic",
         )
 
     destructive_sysrq = scan_destructive_magic_sysrq()
