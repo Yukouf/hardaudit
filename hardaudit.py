@@ -401,6 +401,35 @@ def scan_unsafe_ipv6_source_routing(root="/proc/sys/net/ipv6/conf"):
     return findings
 
 
+def scan_wifi_accepting_unsolicited_ipv6_na(
+    sysctl_root="/proc/sys/net/ipv6/conf",
+    net_root="/sys/class/net",
+):
+    """Liste les interfaces Wi-Fi qui ne jettent pas les NA IPv6 non sollicitees."""
+    try:
+        interfaces = os.listdir(sysctl_root)
+    except OSError:
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        # Le dossier wireless de sysfs identifie une interface 802.11 sans
+        # deviner son nom (wlan*, wlp*, etc.). La politique est locale à l'interface.
+        if not os.path.isdir(os.path.join(net_root, interface, "wireless")):
+            continue
+        try:
+            with open(
+                os.path.join(sysctl_root, interface, "drop_unsolicited_na"),
+                encoding="utf-8",
+            ) as f:
+                value = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        if value == 0:
+            findings.append((interface, value))
+    return findings
+
+
 def scan_unlogged_martian_interfaces(root="/proc/sys/net/ipv4/conf"):
     """Liste les interfaces qui ne journalisent pas les paquets aux sources impossibles."""
     try:
@@ -828,6 +857,16 @@ def audit_network(allowed_ports=None):
                 f"accept_source_route est non negatif globalement et sur : {interfaces}. Linux refuse les autres types mais accepte encore le type 2 lie a Mobile IPv6 ; passer la politique globale ou locale a -1 sauf besoin documente.",
                 "MEDIUM",
                 verify="grep -H . /proc/sys/net/ipv6/conf/{all,default,*}/accept_source_route 2>/dev/null",
+            )
+
+        wifi_unsolicited_na = scan_wifi_accepting_unsolicited_ipv6_na()
+        if wifi_unsolicited_na:
+            interfaces = ", ".join(item[0] for item in wifi_unsolicited_na)
+            m.add(
+                "Annonces de voisin IPv6 non sollicitees acceptees en Wi-Fi",
+                f"Interfaces concernees : {interfaces}. Le kernel recommande de jeter ces Neighbor Advertisements sur 802.11 pour empecher qu'un voisin injecte une association IPv6/MAC non sollicitee. Activer drop_unsolicited_na uniquement sur les interfaces Wi-Fi apres verification des proxies NDP ou mecanismes HA.",
+                "LOW",
+                verify="for i in /sys/class/net/*/wireless; do n=${i%/wireless}; n=${n##*/}; grep -H . /proc/sys/net/ipv6/conf/$n/drop_unsolicited_na; done",
             )
 
         unlogged_martians = scan_unlogged_martian_interfaces()

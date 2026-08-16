@@ -45,6 +45,7 @@ from hardaudit import (
     scan_unsafe_ipv4_redirect_senders,
     scan_unsafe_ipv4_redirects,
     scan_unsafe_ipv6_redirects,
+    scan_wifi_accepting_unsolicited_ipv6_na,
     scan_tcp_timewait_assassination,
     scan_ipv6_routers_accepting_ra,
     scan_ipv6_local_router_advertisements,
@@ -775,6 +776,50 @@ class IPv6SourceRoutingTests(unittest.TestCase):
         findings = hardaudit.scan_unsafe_ipv6_source_routing(root)
         self.assertTrue(all(global_value >= 0 and local_value >= 0
                             for _, global_value, local_value in findings))
+
+
+class WifiUnsolicitedIPv6NeighborAdvertisementTests(unittest.TestCase):
+    def _write_interface(self, sysctl_root, net_root, interface, value, wireless=False):
+        policy = os.path.join(sysctl_root, interface)
+        os.makedirs(policy)
+        with open(os.path.join(policy, "drop_unsolicited_na"), "w", encoding="utf-8") as f:
+            f.write(f"{value}\n")
+        device = os.path.join(net_root, interface)
+        os.makedirs(device)
+        if wireless:
+            os.makedirs(os.path.join(device, "wireless"))
+
+    def test_reports_only_wifi_interfaces_without_drop_policy(self):
+        with tempfile.TemporaryDirectory() as root:
+            sysctl_root = os.path.join(root, "ipv6")
+            net_root = os.path.join(root, "net")
+            os.makedirs(sysctl_root)
+            os.makedirs(net_root)
+            self._write_interface(sysctl_root, net_root, "wlan0", 0, wireless=True)
+            self._write_interface(sysctl_root, net_root, "wlan1", 1, wireless=True)
+            self._write_interface(sysctl_root, net_root, "eth0", 0)
+            self.assertEqual(
+                scan_wifi_accepting_unsolicited_ipv6_na(sysctl_root, net_root),
+                [("wlan0", 0)],
+            )
+
+        with patch(
+            "hardaudit.scan_wifi_accepting_unsolicited_ipv6_na",
+            return_value=[("wlan0", 0)],
+        ):
+            findings = [
+                finding for finding in audit_network().findings
+                if "annonces de voisin ipv6 non sollicitees" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("wlan0", findings[0].detail)
+
+    def test_representative_live_wifi_policy_is_exercised_read_only(self):
+        findings = scan_wifi_accepting_unsolicited_ipv6_na()
+        self.assertTrue(all(value == 0 for _, value in findings))
+        for interface, _ in findings:
+            self.assertTrue(os.path.isdir(os.path.join("/sys/class/net", interface, "wireless")))
 
 
 class MartianPacketLoggingTests(unittest.TestCase):
