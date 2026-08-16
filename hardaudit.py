@@ -583,6 +583,34 @@ def scan_unsafe_ipv4_redirect_senders(root="/proc/sys/net/ipv4/conf"):
     return findings
 
 
+def scan_directed_broadcast_forwarders(root="/proc/sys/net/ipv4/conf"):
+    """Liste les interfaces qui relaient effectivement les broadcasts diriges."""
+    try:
+        with open(os.path.join(root, "all", "bc_forwarding"), encoding="utf-8") as f:
+            all_value = int(f.read().strip())
+        interfaces = os.listdir(root)
+    except (OSError, ValueError):
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            with open(os.path.join(root, interface, "bc_forwarding"), encoding="utf-8") as f:
+                interface_value = int(f.read().strip())
+            with open(os.path.join(root, interface, "forwarding"), encoding="utf-8") as f:
+                forwarding = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+
+        # Le kernel exige le verrou global ET celui de l'interface d'entree.
+        # Le forwarding local confirme que l'interface joue bien le role routeur.
+        if all_value == 1 and interface_value == 1 and forwarding == 1:
+            findings.append((interface, all_value, interface_value, forwarding))
+    return findings
+
+
 def scan_unsafe_ipv6_redirects(root="/proc/sys/net/ipv6/conf"):
     """Liste les interfaces hote qui acceptent les redirects ICMPv6."""
     try:
@@ -874,6 +902,16 @@ def audit_network(allowed_ports=None):
                 f"Interfaces routeur concernees : {interfaces}. Une valeur locale a 1 suffit meme si conf/all vaut 0 ; ces messages peuvent faire choisir une autre passerelle aux machines voisines. Desactiver sauf besoin de routage explicite.",
                 "LOW",
                 verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*/}{send_redirects,forwarding} 2>/dev/null",
+            )
+
+        directed_broadcasts = scan_directed_broadcast_forwarders()
+        if directed_broadcasts:
+            interfaces = ", ".join(item[0] for item in directed_broadcasts)
+            m.add(
+                "Forwarding de broadcast dirige IPv4 actif",
+                f"Interfaces routeur concernees : {interfaces}. bc_forwarding vaut 1 globalement et localement : un paquet unicast vers l'adresse broadcast d'un sous-reseau peut etre relaye a tous ses hotes et servir d'amplification. Conserver 0 sauf besoin reseau historique explicitement filtre.",
+                "MEDIUM",
+                verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*/}{bc_forwarding,forwarding} 2>/dev/null",
             )
 
         ipv6_redirects = scan_unsafe_ipv6_redirects()

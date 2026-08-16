@@ -1101,6 +1101,59 @@ class IcmpRedirectSenderTests(unittest.TestCase):
             self.assertTrue(all_value == 1 or interface_value == 1)
 
 
+class DirectedBroadcastForwardingTests(unittest.TestCase):
+    def _write_interface(self, root, interface, bc_forwarding, forwarding):
+        interface_dir = os.path.join(root, interface)
+        os.makedirs(interface_dir)
+        for name, value in (
+            ("bc_forwarding", bc_forwarding),
+            ("forwarding", forwarding),
+        ):
+            with open(os.path.join(interface_dir, name), "w", encoding="utf-8") as f:
+                f.write(f"{value}\n")
+
+    def test_global_and_local_values_enable_directed_broadcast_forwarding(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_interface(root, "all", 1, 1)
+            self._write_interface(root, "default", 0, 1)
+            self._write_interface(root, "eth0", 1, 1)
+            self._write_interface(root, "eth1", 0, 1)
+            self._write_interface(root, "eth2", 1, 0)
+            self._write_interface(root, "lo", 1, 1)
+            self.assertEqual(
+                hardaudit.scan_directed_broadcast_forwarders(root),
+                [("eth0", 1, 1, 1)],
+            )
+
+    def test_global_zero_keeps_feature_disabled(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_interface(root, "all", 0, 1)
+            self._write_interface(root, "eth0", 1, 1)
+            self.assertEqual(hardaudit.scan_directed_broadcast_forwarders(root), [])
+
+    def test_network_audit_reports_the_amplification_surface(self):
+        with patch(
+            "hardaudit.scan_directed_broadcast_forwarders",
+            return_value=[("eth0", 1, 1, 1)],
+        ):
+            findings = [
+                finding for finding in audit_network().findings
+                if "broadcast dirige" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "MEDIUM")
+        self.assertIn("amplification", findings[0].detail)
+
+    def test_live_policy_is_exercised_read_only(self):
+        root = "/proc/sys/net/ipv4/conf"
+        if not os.path.exists(os.path.join(root, "all", "bc_forwarding")):
+            self.skipTest("directed broadcast forwarding is not exposed by this kernel")
+        findings = hardaudit.scan_directed_broadcast_forwarders(root)
+        for interface, all_value, interface_value, forwarding in findings:
+            self.assertNotIn(interface, ("all", "default", "lo"))
+            self.assertEqual((all_value, interface_value, forwarding), (1, 1, 1))
+
+
 class CpuMitigationBootPolicyTests(unittest.TestCase):
     def _cmdline(self, value):
         cmdline = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
