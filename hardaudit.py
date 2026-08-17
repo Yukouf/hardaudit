@@ -460,6 +460,37 @@ def scan_wifi_accepting_unsolicited_ipv6_na(
     return findings
 
 
+def scan_ipv6_interfaces_without_dad(
+    root="/proc/sys/net/ipv6/conf",
+    addresses_path="/proc/net/if_inet6",
+):
+    """Liste les interfaces IPv6 adressees sans detection effective des doublons."""
+    try:
+        with open(os.path.join(root, "all", "accept_dad"), encoding="utf-8") as f:
+            all_value = int(f.read().strip())
+        with open(addresses_path, encoding="utf-8") as f:
+            addressed = {
+                fields[-1]
+                for line in f
+                if len(fields := line.split()) >= 6 and fields[-1] != "lo"
+            }
+    except (OSError, ValueError):
+        return []
+
+    findings = []
+    for interface in sorted(addressed):
+        try:
+            with open(os.path.join(root, interface, "accept_dad"), encoding="utf-8") as f:
+                local_value = int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+        # Le kernel choisit le maximum entre conf/all et conf/interface.
+        # Une valeur effective nulle desactive DAD pour les nouvelles adresses.
+        if max(all_value, local_value) == 0:
+            findings.append((interface, all_value, local_value))
+    return findings
+
+
 def scan_ipv6_routers_learning_untracked_neighbors(
     root="/proc/sys/net/ipv6/conf",
 ):
@@ -1005,6 +1036,16 @@ def audit_network(allowed_ports=None):
                 f"Interfaces concernees : {interfaces}. Le kernel recommande de jeter ces Neighbor Advertisements sur 802.11 pour empecher qu'un voisin injecte une association IPv6/MAC non sollicitee. Activer drop_unsolicited_na uniquement sur les interfaces Wi-Fi apres verification des proxies NDP ou mecanismes HA.",
                 "LOW",
                 verify="for i in /sys/class/net/*/wireless; do n=${i%/wireless}; n=${n##*/}; grep -H . /proc/sys/net/ipv6/conf/$n/drop_unsolicited_na; done",
+            )
+
+        ipv6_without_dad = scan_ipv6_interfaces_without_dad()
+        if ipv6_without_dad:
+            interfaces = ", ".join(item[0] for item in ipv6_without_dad)
+            m.add(
+                "Detection d'adresse IPv6 en double desactivee",
+                f"Interfaces IPv6 adressees concernees : {interfaces}. accept_dad vaut effectivement 0 : une nouvelle adresse peut devenir active sans verifier qu'un voisin l'utilise deja, avec risque de trafic ambigu ou detourne. Conserver cette exception uniquement pour anycast, HA ou conteneurs explicitement maitrises.",
+                "LOW",
+                verify="grep -H . /proc/sys/net/ipv6/conf/{all,default,*}/accept_dad 2>/dev/null; ip -6 addr show",
             )
 
         untracked_ipv6_neighbors = scan_ipv6_routers_learning_untracked_neighbors()

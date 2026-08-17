@@ -876,6 +876,70 @@ class WifiUnsolicitedIPv6NeighborAdvertisementTests(unittest.TestCase):
             self.assertTrue(os.path.isdir(os.path.join("/sys/class/net", interface, "wireless")))
 
 
+class IPv6DuplicateAddressDetectionTests(unittest.TestCase):
+    def _write_value(self, root, interface, value):
+        policy = os.path.join(root, interface)
+        os.makedirs(policy)
+        with open(os.path.join(policy, "accept_dad"), "w", encoding="utf-8") as f:
+            f.write(f"{value}\n")
+
+    def test_reports_only_addressed_interfaces_without_effective_dad(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = os.path.join(temp, "conf")
+            os.makedirs(root)
+            for interface, value in (
+                ("all", 0), ("default", 1), ("lo", -1),
+                ("eth0", 0), ("eth1", 1), ("eth2", 0),
+            ):
+                self._write_value(root, interface, value)
+            addresses = os.path.join(temp, "if_inet6")
+            with open(addresses, "w", encoding="utf-8") as f:
+                f.write("20010db8000000000000000000000001 02 40 00 80 eth0\n")
+                f.write("20010db8000000000000000000000002 03 40 00 80 eth1\n")
+            self.assertEqual(
+                hardaudit.scan_ipv6_interfaces_without_dad(root, addresses),
+                [("eth0", 0, 0)],
+            )
+
+    def test_global_policy_enables_dad_even_when_interface_value_is_zero(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = os.path.join(temp, "conf")
+            os.makedirs(root)
+            self._write_value(root, "all", 1)
+            self._write_value(root, "eth0", 0)
+            addresses = os.path.join(temp, "if_inet6")
+            with open(addresses, "w", encoding="utf-8") as f:
+                f.write("20010db8000000000000000000000001 02 40 00 80 eth0\n")
+            self.assertEqual(
+                hardaudit.scan_ipv6_interfaces_without_dad(root, addresses), []
+            )
+
+    def test_network_audit_reports_disabled_duplicate_address_detection(self):
+        with patch(
+            "hardaudit.scan_ipv6_interfaces_without_dad",
+            return_value=[("eth0", 0, 0)],
+        ):
+            findings = [
+                finding for finding in audit_network().findings
+                if "adresse ipv6 en double" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("eth0", findings[0].detail)
+
+    def test_representative_live_policy_is_exercised_read_only(self):
+        root = "/proc/sys/net/ipv6/conf"
+        addresses = "/proc/net/if_inet6"
+        if not os.path.exists(os.path.join(root, "all", "accept_dad")):
+            self.skipTest("IPv6 duplicate address detection is not exposed")
+        findings = hardaudit.scan_ipv6_interfaces_without_dad(root, addresses)
+        for interface, all_value, local_value in findings:
+            self.assertNotEqual(interface, "lo")
+            self.assertEqual(max(all_value, local_value), 0)
+            with open(addresses, encoding="utf-8") as f:
+                self.assertIn(interface, {line.split()[-1] for line in f if line.split()})
+
+
 class IPv6UntrackedNeighborAdvertisementTests(unittest.TestCase):
     def _write_interface(
         self, root, interface, accept_untracked_na, forwarding, drop_unsolicited_na=0
