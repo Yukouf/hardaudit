@@ -2380,6 +2380,42 @@ class KernelStackOffsetRandomizationTests(unittest.TestCase):
 
 
 class KernelSysctlSemanticsTests(unittest.TestCase):
+    def test_router_trusting_forgeable_path_mtu_is_reported(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as forwarding, \
+                tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
+            forwarding.write("1\n"); forwarding.flush()
+            policy.write("1\n"); policy.flush()
+            self.assertEqual(
+                hardaudit.scan_forwarded_protocol_pmtu_trust(
+                    forwarding.name, policy.name
+                ),
+                (1, 1),
+            )
+
+        with patch("hardaudit.scan_forwarded_protocol_pmtu_trust", return_value=(1, 1)):
+            findings = [
+                finding for finding in audit_network().findings
+                if "pmtu" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("forge", findings[0].detail.lower())
+
+    def test_representative_router_rejects_protocol_pmtu_and_live_policy_is_read_only(self):
+        for forwarding_value, policy_value in ((1, 0), (0, 1)):
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as forwarding, \
+                    tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
+                forwarding.write(f"{forwarding_value}\n"); forwarding.flush()
+                policy.write(f"{policy_value}\n"); policy.flush()
+                self.assertIsNone(
+                    hardaudit.scan_forwarded_protocol_pmtu_trust(
+                        forwarding.name, policy.name
+                    )
+                )
+
+        live = hardaudit.scan_forwarded_protocol_pmtu_trust()
+        self.assertIn(live, (None, (1, 1)))
+
     def test_shared_tcp_challenge_ack_limit_is_reported(self):
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as policy:
             policy.write("1000\n")

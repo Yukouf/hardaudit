@@ -785,6 +785,26 @@ def scan_ipv6_local_router_advertisements(root="/proc/sys/net/ipv6/conf"):
     return findings
 
 
+def scan_forwarded_protocol_pmtu_trust(
+    forwarding_path="/proc/sys/net/ipv4/ip_forward",
+    policy_path="/proc/sys/net/ipv4/ip_forward_use_pmtu",
+):
+    """Retourne le couple actif quand un routeur fait confiance aux PMTU de protocole."""
+    try:
+        values = []
+        for path in (forwarding_path, policy_path):
+            with open(path, encoding="utf-8") as f:
+                values.append(int(f.read().strip()))
+    except (OSError, ValueError):
+        return None
+
+    forwarding, use_pmtu = values
+    # Cette politique n'agit que sur les paquets forwardés. Le kernel la laisse
+    # désactivée par défaut, car une PMTU apprise par le protocole se forge
+    # facilement et peut forcer le routeur à fragmenter inutilement le trafic.
+    return (forwarding, use_pmtu) if forwarding == 1 and use_pmtu == 1 else None
+
+
 def scan_disabled_invalid_tcp_ratelimit(
     path="/proc/sys/net/ipv4/tcp_invalid_ratelimit",
 ):
@@ -1120,6 +1140,14 @@ def audit_network(allowed_ports=None):
                 f"Interfaces concernees : {interfaces}. Linux refuse normalement une RA dont l'adresse source appartient deja a la machine pour eviter une boucle reseau involontaire ; conserver accept_ra_from_local=1 uniquement pour un montage documente.",
                 "LOW",
                 verify="grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_ra,accept_ra_from_local,forwarding} 2>/dev/null",
+            )
+
+        if scan_forwarded_protocol_pmtu_trust() == (1, 1):
+            m.add(
+                "Routeur faisant confiance aux PMTU de protocole",
+                "net.ipv4.ip_forward = 1 et net.ipv4.ip_forward_use_pmtu = 1 : le routeur accepte des informations de taille de chemin facilement forgeables, ce qui peut lui imposer une fragmentation indesirable. Conserver 0 sauf logiciel user-space de decouverte PMTU qui exige explicitement cette confiance.",
+                "LOW",
+                verify="sysctl net.ipv4.ip_forward net.ipv4.ip_forward_use_pmtu",
             )
 
         # Un segment hors fenêtre, un ACK hors fenêtre ou un échec PAWS peut
