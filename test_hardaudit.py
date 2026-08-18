@@ -74,6 +74,8 @@ from hardaudit import (
     scan_disabled_hung_task_detector,
     scan_destructive_magic_sysrq,
     scan_orphaned_sysv_shared_memory,
+    scan_sysv_msg_limits,
+    MSG_LIMIT_DEFAULTS,
     scan_suboptimal_aslr_entropy,
     scan_zero_page_mappable,
     shadow_permissions_unsafe,
@@ -1723,6 +1725,84 @@ class OrphanedSysvSharedMemoryTests(unittest.TestCase):
             self.assertTrue(any(item["shmid"] == shmid for item in findings))
         finally:
             self.assertEqual(libc.shmctl(shmid, 0, None), 0)
+
+
+class SysvMsgLimitsTests(unittest.TestCase):
+    def _write_limits(self, msgmax, msgmnb, msgmni):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root)
+        with open(os.path.join(root, "msgmax"), "w") as f:
+            f.write(f"{msgmax}\n")
+        with open(os.path.join(root, "msgmnb"), "w") as f:
+            f.write(f"{msgmnb}\n")
+        with open(os.path.join(root, "msgmni"), "w") as f:
+            f.write(f"{msgmni}\n")
+        return root
+
+    def test_default_limits_are_read_and_compute_reachable_bytes(self):
+        root = self._write_limits(8192, 16384, 32000)
+        limits = scan_sysv_msg_limits(root)
+        self.assertEqual(limits["msgmax"], 8192)
+        self.assertEqual(limits["msgmnb"], 16384)
+        self.assertEqual(limits["msgmni"], 32000)
+        self.assertEqual(limits["reachable_bytes"], 32000 * 16384)
+
+    def test_missing_limit_file_returns_none(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root)
+        with open(os.path.join(root, "msgmax"), "w") as f:
+            f.write("8192\n")
+        self.assertIsNone(scan_sysv_msg_limits(root))
+
+    def test_default_limits_are_reported_as_info_not_a_penalty(self):
+        with patch(
+            "hardaudit.scan_sysv_msg_limits",
+            return_value={**MSG_LIMIT_DEFAULTS, "reachable_bytes": 32000 * 16384},
+        ):
+            findings = [f for f in audit_kernel().findings
+                        if "Files de messages SysV" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "INFO")
+        self.assertEqual(findings[0].penalty, 0)
+        self.assertIn("msgmni", findings[0].detail)
+
+    def test_raised_limits_are_reported_as_low(self):
+        with patch(
+            "hardaudit.scan_sysv_msg_limits",
+            return_value={**MSG_LIMIT_DEFAULTS, "msgmni": 64000,
+                          "reachable_bytes": 64000 * 16384},
+        ):
+            findings = [f for f in audit_kernel().findings
+                        if "Files de messages SysV" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+
+    def test_representative_single_queue_caps_at_msgb_nb(self):
+        if not os.path.exists("/proc/sys/kernel/msgmnb") or not hasattr(os, "fork"):
+            self.skipTest("SysV msg ou fork indisponible")
+        libc = ctypes.CDLL(None, use_errno=True)
+        IPC_PRIVATE, IPC_CREAT, IPC_NOWAIT, IPC_RMID = 0, 0o1000, 0o4000, 0
+        with open("/proc/sys/kernel/msgmnb") as f:
+            msgmnb = int(f.read().strip())
+        msqid = libc.msgget(IPC_PRIVATE, IPC_CREAT | 0o600)
+        if msqid < 0:
+            self.skipTest("msgget indisponible")
+        try:
+            chunk = 1024
+            Buf = type("B", (ctypes.Structure,), {
+                "_fields_": [("mtype", ctypes.c_long),
+                             ("mtext", ctypes.c_char * chunk)]})
+            sent = 0
+            while True:
+                buf = Buf(); buf.mtype = 1; buf.mtext = b"\x41" * chunk
+                if libc.msgsnd(msqid, ctypes.byref(buf), chunk, IPC_NOWAIT) != 0:
+                    break
+                sent += chunk
+            # Sans message de plus de msgmax, la seule borne atteinte est msgmnb.
+            self.assertGreaterEqual(sent, msgmnb - chunk)
+            self.assertLess(sent, msgmnb + chunk)
+        finally:
+            libc.msgctl(msqid, IPC_RMID, None)
 
 
 class UnprivilegedBpfTests(unittest.TestCase):

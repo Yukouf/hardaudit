@@ -2091,6 +2091,36 @@ def scan_destructive_magic_sysrq(path="/proc/sys/kernel/sysrq"):
     return (value, destructive) if destructive else None
 
 
+MSG_LIMIT_DEFAULTS = {"msgmax": 8192, "msgmnb": 16384, "msgmni": 32000}
+
+
+def scan_sysv_msg_limits(root="/proc/sys/kernel"):
+    """Lit les limites SysV des files de messages et le plafond atteignable.
+
+    msgmax borne un message, msgmnb borne une file, msgmni borne le nombre de
+    files. Sans quota global ni limite par UID, un compte local peut donc creer
+    jusqu'a ``msgmni`` files de ``msgmnb`` octets chacune : le plafond total
+    qu'un seul appelant peut atteindre vaut ``msgmni * msgmnb`` octets de
+    memoire noyau. Retourne un dict avec msgmax, msgmnb, msgmni et le plafond
+    calcule ; None si ces limites sont inaccessibles.
+    """
+    values = {}
+    for name, default in MSG_LIMIT_DEFAULTS.items():
+        try:
+            with open(os.path.join(root, name), encoding="utf-8") as f:
+                values[name] = int(f.read().strip())
+        except (OSError, ValueError):
+            values[name] = None
+    if any(v is None for v in values.values()):
+        return None
+    # msgmni et msgmnb sont signes ; une valeur par defaut negative est resolue
+    # par le kernel en fonction de la memoire disponible et reste un signal de
+    # configuration explicite, pas un simple silence.
+    total = values["msgmni"] * values["msgmnb"]
+    return {"msgmax": values["msgmax"], "msgmnb": values["msgmnb"],
+            "msgmni": values["msgmni"], "reachable_bytes": total}
+
+
 def scan_orphaned_sysv_shared_memory(
     table_path="/proc/sysvipc/shm",
     proc_root="/proc",
@@ -2528,6 +2558,31 @@ def audit_kernel():
             "fs.pipe-user-pages-soft = 0 et fs.pipe-user-pages-hard = 0 : aucune limite par utilisateur n'est appliquee. Fixer au moins une borne souple positive adaptee a la charge pour reduire un epuisement de memoire noyau par un compte local.",
             "LOW",
             verify="sysctl fs.pipe-user-pages-soft fs.pipe-user-pages-hard; getconf PAGE_SIZE",
+        )
+
+    # Les files de messages SysV n'ont pas de quota global : sans limite par
+    # UID, un compte local peut creer jusqu'a msgmni files de msgmnb octets.
+    # Le defaut Linux (32000 x 16 Ko) represente plusieurs centaines de Mo de
+    # memoire noyau reservables par un seul appelant ; un reglage plus bas
+    # reduit la surface de type deni de service sur un hote partage.
+    msg_limits = scan_sysv_msg_limits()
+    if msg_limits is not None:
+        reachable_mb = msg_limits["reachable_bytes"] / (1024 * 1024)
+        raised = (
+            msg_limits["msgmni"] > MSG_LIMIT_DEFAULTS["msgmni"]
+            or msg_limits["msgmnb"] > MSG_LIMIT_DEFAULTS["msgmnb"]
+        )
+        sev = "LOW" if raised else "INFO"
+        m.add(
+            "Files de messages SysV a quota extensible",
+            f"msgmni={msg_limits['msgmni']}, msgmnb={msg_limits['msgmnb']}, "
+            f"msgmax={msg_limits['msgmax']} : un compte local peut creer jusqu'a "
+            f"{msg_limits['msgmni']} files de {msg_limits['msgmnb']} octets, soit "
+            f"environ {reachable_mb:.0f} Mo de memoire noyau sans quota global. "
+            f"Reduire msgmni/msgmnb sur un hote partage apres validation des "
+            f"applications SysV existantes.",
+            sev,
+            verify="sysctl kernel.msgmax kernel.msgmnb kernel.msgmni; ipcs -q",
         )
 
     # Ces sysctl bloquent plusieurs pieges inter-utilisateurs dans les
