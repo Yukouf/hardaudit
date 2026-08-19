@@ -78,6 +78,7 @@ from hardaudit import (
     MSG_LIMIT_DEFAULTS,
     scan_suboptimal_aslr_entropy,
     scan_zero_page_mappable,
+    scan_devkmsg_write_mode,
     shadow_permissions_unsafe,
 )
 
@@ -265,6 +266,36 @@ class SplitLockMitigationTests(unittest.TestCase):
     def test_live_policy_is_read_without_modification(self):
         result = hardaudit.scan_disabled_split_lock_mitigation()
         self.assertIn(result, (None, 0))
+
+
+class DevKmsgWriteModeTests(unittest.TestCase):
+    def _sysctl(self, value):
+        sysctl = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8")
+        sysctl.write(f"{value}\n")
+        sysctl.flush()
+        return sysctl
+
+    def test_unlimited_write_mode_is_reported(self):
+        with self._sysctl("on") as sysctl:
+            self.assertEqual(hardaudit.scan_devkmsg_write_mode(sysctl.name), "on")
+
+        with patch("hardaudit.scan_devkmsg_write_mode", return_value="on"):
+            findings = [f for f in audit_kernel().findings if "ring buffer" in f.title.lower()]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("ratelimit", findings[0].detail)
+
+    def test_representative_hardened_off_passes(self):
+        with self._sysctl("off") as sysctl:
+            self.assertIsNone(hardaudit.scan_devkmsg_write_mode(sysctl.name))
+
+    def test_ratelimit_compromise_is_accepted(self):
+        with self._sysctl("ratelimit") as sysctl:
+            self.assertIsNone(hardaudit.scan_devkmsg_write_mode(sysctl.name))
+
+    def test_live_mode_has_known_values(self):
+        result = hardaudit.scan_devkmsg_write_mode()
+        self.assertIn(result, (None, "on", "ratelimit"))
 
 
 class KernelWarningLimitTests(unittest.TestCase):

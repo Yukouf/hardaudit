@@ -1910,6 +1910,24 @@ def scan_zero_page_mappable(path="/proc/sys/vm/mmap_min_addr"):
     return value if value == 0 else None
 
 
+def scan_devkmsg_write_mode(path="/proc/sys/kernel/printk_devkmsg"):
+    """Retourne le mode d'ecriture de /dev/kmsg quand il est plus permissif que off.
+
+    Le ring buffer du noyau peut etre alimente par ecriture dans /dev/kmsg.
+    printk_devkmsg controle cette porte :
+      - off      : ecriture interdite (lecture preservee), retourne None.
+      - ratelimit: ecriture authorisee mais bornee en debit.
+      - on       : ecriture illimitee, retourne "on".
+    Ne pas confondre ce sysctl avec dmesg_restrict, qui ne limite que la lecture.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            value = f.read().strip()
+    except (OSError, ValueError):
+        return None
+    return value if value == "on" else None
+
+
 def scan_kernel_lockdown_disabled(path="/sys/kernel/security/lockdown"):
     """Retourne le mode courant si l'interface Lockdown existe et vaut none."""
     try:
@@ -2862,6 +2880,19 @@ def audit_kernel():
             f"Entrees actives avec le drapeau C : {entries}. Un binaire setuid root correspondant execute l'interpreteur avec les droits root ; conserver ce drapeau uniquement pour un interpreteur strictement maitrise.",
             "HIGH",
             verify="grep -H -E '^(enabled|interpreter |flags:)' /proc/sys/fs/binfmt_misc/* 2>/dev/null",
+        )
+
+    # printk_devkmsg controle l'ecriture dans le ring buffer via /dev/kmsg,
+    # independamment de dmesg_restrict qui ne borne que la lecture. Le mode on
+    # laisse tout detenteur du descripteur injecter un nombre illimite de lignes
+    # a l'apparence kernel dans les journaux que drainent journald/audit.
+    if scan_devkmsg_write_mode() == "on":
+        path = "/proc/sys/kernel/printk_devkmsg"
+        m.add(
+            "Ecriture illimitee dans le ring buffer kernel",
+            f"{path} = on. Un processus ayant /dev/kmsg en ecriture peut injecter sans limite des messages a l'apparence noyau dans les journaux systeme. Passer a off (recommande par les guides de durcissement, mais incompatible systemd-journald selon version) ou au minimum ratelimit pour borner le debit d'injection.",
+            "LOW",
+            verify=f"cat {path}; [ -e /dev/kmsg ] && stat -c '%A %U %G %n' /dev/kmsg",
         )
 
     # Kernel version
