@@ -1928,6 +1928,92 @@ def scan_devkmsg_write_mode(path="/proc/sys/kernel/printk_devkmsg"):
     return value if value == "on" else None
 
 
+MAX_MAP_COUNT_KEY = "vm.max_map_count"
+
+
+def _parse_sysctl_value(text):
+    """Extrait la valeur numerique d'une directive sysctl, sans commentaire.
+
+    ``text`` est ce qui suit le nom de la cle (`=1048576`, ` 1048576`,
+    `= 1048576 # note`). La valeur est rendue robuste aux espaces, a un `=`
+    optionnel et aux commentaires en fin de ligne. Tout contenu non numerique
+    est ignore (retour ``None``).
+    """
+    value = text.split("#", 1)[0].strip().lstrip("=").strip()
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def scan_max_map_count_config_drift(
+    running_path="/proc/sys/vm/max_map_count",
+    conf_roots=("/etc/sysctl.d", "/etc/sysctl.conf"),
+):
+    """Retourne la derive entre la limite VMA declaree et celle reellement active.
+
+    ``vm.max_map_count`` borne le nombre de regions de memoire (VMA) que peut
+    ouvrir un processus. Declare dans sysctl.d et reelle dans le noyau doivent
+    concorder : une valeur declaree superieure signifie qu'un processus a fort
+    besoin de cartes memoire (navigateur, JVM, PostgreSQL/mongo, node) peut
+    echouer en ``ENOMEM`` peu apres le redemarrage, sans epuisement reel de la
+    RAM. Ce controles ignore volontairement le sens de la derive (monter ou
+    baisser) : seule compte la difference entre la politique configuree et
+    l'etat effectif.
+
+    Retourne ``(declared, running)`` quand les deux valeurs existent et
+    different ; ``None`` si la directive n'est pas declaree, si la valeur en
+    cours est illisible ou si rien ne doit etre signale.
+    """
+    declared_value = None
+    try:
+        roots = conf_roots if isinstance(conf_roots, (list, tuple)) else (conf_roots,)
+        for root in roots:
+            if root.endswith(".conf"):
+                try:
+                    with open(root, encoding="utf-8", errors="replace") as f:
+                        for raw in f:
+                            stripped = raw.strip()
+                            if not stripped.startswith(MAX_MAP_COUNT_KEY):
+                                continue
+                            parsed = _parse_sysctl_value(stripped[len(MAX_MAP_COUNT_KEY):])
+                            if parsed is not None:
+                                declared_value = parsed
+                except OSError:
+                    continue
+            else:
+                try:
+                    for name in sorted(os.listdir(root)):
+                        if not name.endswith(".conf"):
+                            continue
+                        path = os.path.join(root, name)
+                        with open(path, encoding="utf-8", errors="replace") as f:
+                            for raw in f:
+                                stripped = raw.strip()
+                                if not stripped.startswith(MAX_MAP_COUNT_KEY):
+                                    continue
+                                parsed = _parse_sysctl_value(stripped[len(MAX_MAP_COUNT_KEY):])
+                                if parsed is not None:
+                                    declared_value = parsed
+                except OSError:
+                    continue
+    except OSError:
+        return None
+
+    if declared_value is None:
+        return None
+    try:
+        with open(running_path, encoding="utf-8") as f:
+            running_value = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    if running_value == declared_value:
+        return None
+    return declared_value, running_value
+
+
 def scan_kernel_lockdown_disabled(path="/sys/kernel/security/lockdown"):
     """Retourne le mode courant si l'interface Lockdown existe et vaut none."""
     try:
@@ -2893,6 +2979,21 @@ def audit_kernel():
             f"{path} = on. Un processus ayant /dev/kmsg en ecriture peut injecter sans limite des messages a l'apparence noyau dans les journaux systeme. Passer a off (recommande par les guides de durcissement, mais incompatible systemd-journald selon version) ou au minimum ratelimit pour borner le debit d'injection.",
             "LOW",
             verify=f"cat {path}; [ -e /dev/kmsg ] && stat -c '%A %U %G %n' /dev/kmsg",
+        )
+
+    # vm.max_map_count borne le nombre de regions memoire (VMA) par processus.
+    # Une valeur declaree dans sysctl.d doit correspondre a celle du noyau :
+    # une derive signifie que la politique configuree n'est pas en vigueur, et
+    # une limite inferieure a la valeur prevue peut faire echouer en ENOMEM des
+    # processus a fort besoin de cartes memoire (JVM, PostgreSQL, navigateur).
+    map_count_drift = scan_max_map_count_config_drift()
+    if map_count_drift is not None:
+        declared, running = map_count_drift
+        m.add(
+            "Limite de cartes memoire configuree mais inactive",
+            f"vm.max_map_count = {running} en vigueur, alors que /etc/sysctl.d declare {declared}. La politique ne s'applique pas : soit elle n'a jamais ete relue (sysctl --system), soit une autre valeur l'ecrase. Une limite inferieure a l'attendu peut faire echouer mmap en ENOMEM sur les processus exigeants en regions memoire.",
+            "LOW",
+            verify="sysctl vm.max_map_count; grep -R 'vm.max_map_count' /etc/sysctl.d/ /etc/sysctl.conf; sysctl --system",
         )
 
     # Kernel version

@@ -75,6 +75,7 @@ from hardaudit import (
     scan_destructive_magic_sysrq,
     scan_orphaned_sysv_shared_memory,
     scan_sysv_msg_limits,
+    scan_max_map_count_config_drift,
     MSG_LIMIT_DEFAULTS,
     scan_suboptimal_aslr_entropy,
     scan_zero_page_mappable,
@@ -296,6 +297,84 @@ class DevKmsgWriteModeTests(unittest.TestCase):
     def test_live_mode_has_known_values(self):
         result = hardaudit.scan_devkmsg_write_mode()
         self.assertIn(result, (None, "on", "ratelimit"))
+
+
+class MaxMapCountDriftTests(unittest.TestCase):
+    def _setup(self, declared, running, name="99-map.conf"):
+        tree = tempfile.TemporaryDirectory()
+        conf_dir = os.path.join(tree.name, "sysctl.d")
+        os.makedirs(conf_dir)
+        conf = os.path.join(conf_dir, name)
+        with open(conf, "w", encoding="utf-8") as f:
+            f.write(f"# tunable\nvm.max_map_count={declared}\n")
+        running_file = os.path.join(tree.name, "max_map_count")
+        with open(running_file, "w", encoding="utf-8") as f:
+            f.write(f"{running}\n")
+        return tree, conf_dir, running_file
+
+    def test_drift_between_declared_and_running_values_is_reported(self):
+        tree, conf_dir, running_file = self._setup("1048576", "262144")
+        try:
+            self.assertEqual(
+                hardaudit.scan_max_map_count_config_drift(
+                    running_path=running_file, conf_roots=conf_dir),
+                (1048576, 262144),
+            )
+        finally:
+            tree.cleanup()
+
+    def test_matching_values_pass(self):
+        tree, conf_dir, running_file = self._setup("262144", "262144")
+        try:
+            self.assertIsNone(
+                hardaudit.scan_max_map_count_config_drift(
+                    running_path=running_file, conf_roots=conf_dir))
+        finally:
+            tree.cleanup()
+
+    def test_value_with_spaces_and_comment_is_parsed(self):
+        tree, conf_dir, running_file = self._setup("1048576", "1048576", name="00-x.conf")
+        try:
+            conf = os.path.join(conf_dir, "00-x.conf")
+            with open(conf, "w", encoding="utf-8") as f:
+                f.write("vm.max_map_count = 1048576 # pour JVM\n")
+            self.assertIsNone(
+                hardaudit.scan_max_map_count_config_drift(
+                    running_path=running_file, conf_roots=conf_dir))
+        finally:
+            tree.cleanup()
+
+    def test_no_declared_directive_passes(self):
+        tree = tempfile.TemporaryDirectory()
+        try:
+            conf_dir = os.path.join(tree.name, "sysctl.d")
+            os.makedirs(conf_dir)
+            with open(os.path.join(conf_dir, "99-x.conf"), "w", encoding="utf-8") as f:
+                f.write("kernel.printk = 3\n")
+            running_file = os.path.join(tree.name, "max_map_count")
+            with open(running_file, "w", encoding="utf-8") as f:
+                f.write("262144\n")
+            self.assertIsNone(
+                hardaudit.scan_max_map_count_config_drift(
+                    running_path=running_file, conf_roots=conf_dir))
+        finally:
+            tree.cleanup()
+
+    def test_audit_reports_drift_via_kernel_module(self):
+        with patch(
+            "hardaudit.scan_max_map_count_config_drift",
+            return_value=(1048576, 262144),
+        ):
+            findings = [f for f in audit_kernel().findings
+                        if "cartes memoire configuree" in f.title]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("1048576", findings[0].detail)
+
+    def test_live_config_is_exercised_read_only(self):
+        result = hardaudit.scan_max_map_count_config_drift()
+        self.assertIsInstance(
+            result, (type(None), tuple))
 
 
 class KernelWarningLimitTests(unittest.TestCase):
