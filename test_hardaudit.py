@@ -1942,7 +1942,8 @@ class BpfJitHardeningTests(unittest.TestCase):
             sysctl.flush()
             self.assertEqual(hardaudit.scan_bpf_jit_hardening(sysctl.name), 0)
 
-        with patch("hardaudit.scan_bpf_jit_hardening", return_value=0):
+        with patch("hardaudit.scan_bpf_jit_hardening", return_value=0), \
+             patch("hardaudit.scan_bpf_jit_kallsyms_exposed", return_value=None):
             findings = [f for f in audit_kernel().findings if "JIT BPF" in f.title]
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0].severity, "LOW")
@@ -1959,6 +1960,93 @@ class BpfJitHardeningTests(unittest.TestCase):
             sysctl.write("1\n")
             sysctl.flush()
             self.assertEqual(hardaudit.scan_bpf_jit_hardening(sysctl.name), 1)
+
+
+class BpfJitKallsymsExposureTests(unittest.TestCase):
+    def _write(self, directory, name, value):
+        path = os.path.join(directory, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(value)
+        return path
+
+    def test_exposed_export_without_mask_is_reported(self):
+        """JIT actif + masquage absent + export actif + kptr laxiste => finding."""
+        with tempfile.TemporaryDirectory() as td:
+            probe = (
+                self._write(td, "kallsyms", "1\n"),
+                self._write(td, "enable", "1\n"),
+                self._write(td, "harden", "0\n"),
+                self._write(td, "kptr", "0\n"),
+            )
+            self.assertEqual(
+                hardaudit.scan_bpf_jit_kallsyms_exposed(*probe), (1, 0)
+            )
+
+        with patch("hardaudit.scan_bpf_jit_kallsyms_exposed", return_value=(1, 0)):
+            findings = [
+                f for f in audit_kernel().findings if "kallsyms" in f.title
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "LOW")
+        self.assertIn("kallsyms", findings[0].detail)
+        self.assertIn("kptr_restrict=0", findings[0].detail)
+
+    def test_default_disabled_export_passes(self):
+        """bpf_jit_kallsyms=0 (defaut) ne produit aucun finding."""
+        with tempfile.TemporaryDirectory() as td:
+            probe = (
+                self._write(td, "kallsyms", "0\n"),
+                self._write(td, "enable", "1\n"),
+                self._write(td, "harden", "0\n"),
+                self._write(td, "kptr", "0\n"),
+            )
+            self.assertIsNone(hardaudit.scan_bpf_jit_kallsyms_exposed(*probe))
+
+    def test_jit_hardening_disables_export(self):
+        """Quand bpf_jit_harden est actif, l'export kallsyms est effectivement neutre."""
+        with tempfile.TemporaryDirectory() as td:
+            probe = (
+                self._write(td, "kallsyms", "1\n"),
+                self._write(td, "enable", "1\n"),
+                self._write(td, "harden", "2\n"),
+                self._write(td, "kptr", "0\n"),
+            )
+            self.assertIsNone(hardaudit.scan_bpf_jit_kallsyms_exposed(*probe))
+
+    def test_jit_disabled_export_is_irrelevant(self):
+        """Sans JIT active, exposer kallsyms n'a aucune portee."""
+        with tempfile.TemporaryDirectory() as td:
+            probe = (
+                self._write(td, "kallsyms", "1\n"),
+                self._write(td, "enable", "0\n"),
+                self._write(td, "harden", "0\n"),
+                self._write(td, "kptr", "0\n"),
+            )
+            self.assertIsNone(hardaudit.scan_bpf_jit_kallsyms_exposed(*probe))
+
+    def test_restrictive_kptr_qualifies_lower_scope(self):
+        """kptr_restrict>0 borne la lecture des adresses mais conserve le finding."""
+        with tempfile.TemporaryDirectory() as td:
+            probe = (
+                self._write(td, "kallsyms", "1\n"),
+                self._write(td, "enable", "1\n"),
+                self._write(td, "harden", "0\n"),
+                self._write(td, "kptr", "1\n"),
+            )
+            self.assertEqual(
+                hardaudit.scan_bpf_jit_kallsyms_exposed(*probe), (1, 1)
+            )
+
+    def test_missing_sysctl_is_ignored(self):
+        """Un kernel sans le sysctl ne doit jamais creer de finding."""
+        with tempfile.TemporaryDirectory() as td:
+            probe = (
+                self._write(td, "kallsyms", "1\n"),
+                self._write(td, "enable", "1\n"),
+                self._write(td, "harden", "0\n"),
+                "/path/that/does/not/exist",
+            )
+            self.assertIsNone(hardaudit.scan_bpf_jit_kallsyms_exposed(*probe))
 
 
 class IoUringRestrictionTests(unittest.TestCase):

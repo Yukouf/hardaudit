@@ -1602,6 +1602,55 @@ def scan_bpf_jit_hardening(path="/proc/sys/net/core/bpf_jit_harden"):
     return value if value in (0, 1) else None
 
 
+def scan_bpf_jit_kallsyms_exposed(
+    kallsyms_path="/proc/sys/net/core/bpf_jit_kallsyms",
+    enable_path="/proc/sys/net/core/bpf_jit_enable",
+    harden_path="/proc/sys/net/core/bpf_jit_harden",
+    kptr_path="/proc/sys/kernel/kptr_restrict",
+):
+    """Retourne la portee d'exposition quand le JIT BPF publie ses adresses.
+
+    Quand ``bpf_jit_kallsyms`` vaut 1, le kernel exporte les adresses des
+    programmes JIT compiles dans ``/proc/kallsyms``. Ces images JIT ne sont pas
+    randomisees independamment de KASLR : connaitre leur adresse precise
+    supprime l'entropie qui protege la zone de code JIT face a une tentative
+    de JIT spraying. Le document upstream ``sysctl/net.rst`` precise que
+    l'export est desactive par defaut (0) et reserve aux utilisateurs
+    privilegies (1), et qu'il est desactive automatiquement des que
+    ``bpf_jit_harden`` est actif (masquage des constantes).
+
+    La lecture effective de ``/proc/kallsyms`` depend de ``kptr_restrict`` :
+    si la valeur est 0, tout compte local peut lire ces adresses ; une valeur
+    positive les resserve aux processus munies de CAP_SYSLOG. Le contrôle
+    signale donc le couple ``(bpf_jit_kallsyms, kptr_restrict)`` pour laisser
+    l'appelant qualifier la portee reelle.
+
+    Retourne ``(bpf_jit_kallsyms, kptr_restrict)`` quand le JIT est active,
+    que le masquage JIT est absent et que l'export est active ; ``None`` sinon.
+    """
+    try:
+        values = {}
+        for name, path in (("kallsyms", kallsyms_path),
+                           ("enable", enable_path),
+                           ("harden", harden_path),
+                           ("kptr", kptr_path)):
+            with open(path, encoding="utf-8") as f:
+                values[name] = int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+    # Sans JIT active, il n'y a aucune image JIT dont exposer l'adresse.
+    if values["enable"] == 0:
+        return None
+    # Le doc kernel : des que le masquage JIT est actif, l'export kallsyms est
+    # desactive de facon effective, quelle que soit la valeur du sysctl.
+    if values["harden"] != 0:
+        return None
+    if values["kallsyms"] != 1:
+        return None
+    return values["kallsyms"], values["kptr"]
+
+
 def scan_disabled_perf_cpu_throttle(
     path="/proc/sys/kernel/perf_cpu_time_max_percent",
 ):
@@ -2731,6 +2780,36 @@ def audit_kernel():
             f"{path} = {jit_hardening} ({scope}). Le mode 2 durcit tous les programmes BPF JIT et reduit le risque de JIT spraying, avec un possible cout de performance.",
             "LOW",
             verify=f"cat {path}; cat /proc/sys/kernel/unprivileged_bpf_disabled",
+        )
+
+    # Même avec le JIT actif, exposer les adresses des images compilees dans
+    # /proc/kallsyms retire l'entropie qui protege la zone de code JIT face au
+    # JIT spraying. La documentation upstream fait de 0 la valeur par defaut
+    # et desactive cet export des que bpf_jit_harden est actif ; le contrôle
+    # ne signale donc que le couple JIT actif + masquage absent + export actif,
+    # et qualifie la portee par kptr_restrict (0 = lisible par tout compte).
+    jit_kallsyms = scan_bpf_jit_kallsyms_exposed()
+    if jit_kallsyms is not None:
+        _, kptr = jit_kallsyms
+        if kptr == 0:
+            scope = (
+                "tout compte local peut lire ces adresses (kptr_restrict=0), "
+                "ce qui supprime l'entropie KASLR de la zone JIT"
+            )
+        else:
+            scope = (
+                "la lecture est limitee aux processus avec CAP_SYSLOG "
+                "(kptr_restrict>0) ; l'export alimente surtout le tracage et "
+                "reste une surface moindre"
+            )
+        m.add(
+            "Adresses du JIT BPF publiees dans kallsyms",
+            f"net.core.bpf_jit_kallsyms = 1 (defaut 0) avec bpf_jit_enable actif et bpf_jit_harden absent. La zone de code JIT a sa position exposee : {scope}. Passer a 0 (ou laisser bpf_jit_harden=1/2, qui desactive cet export) si le tracage BPF ne l'exige pas.",
+            "LOW",
+            verify=(
+                "cat /proc/sys/net/core/bpf_jit_kallsyms /proc/sys/net/core/bpf_jit_enable "
+                "/proc/sys/net/core/bpf_jit_harden /proc/sys/kernel/kptr_restrict"
+            ),
         )
 
     # La documentation du kernel indique explicitement que restreindre
