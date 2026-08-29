@@ -34,6 +34,7 @@ from hardaudit import (
     scan_exposed_kernel_debug_mounts,
     scan_gratuitous_arp_updates,
     scan_unsolicited_arp_learning,
+    scan_proxy_arp_interfaces,
     scan_unicast_ipv4_in_l2_multicast,
     scan_mount_options,
     scan_unlogged_martian_interfaces,
@@ -796,6 +797,70 @@ class UnsolicitedArpLearningTests(unittest.TestCase):
             effective == max(global_value, local_value) and effective in (1, 2)
             for _, global_value, local_value, effective in findings
         ))
+
+
+class ProxyArpTests(unittest.TestCase):
+    def _write_flags(self, root, interface, proxy_arp=0, pvlan=0):
+        interface_dir = os.path.join(root, interface)
+        os.makedirs(interface_dir, exist_ok=True)
+        for name, value in (("proxy_arp", proxy_arp), ("proxy_arp_pvlan", pvlan)):
+            with open(os.path.join(interface_dir, name), "w", encoding="utf-8") as f:
+                f.write(f"{value}\n")
+
+    def test_reports_interfaces_where_global_or_local_proxy_arp_is_active(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_flags(root, "all", proxy_arp=0, pvlan=0)
+            self._write_flags(root, "default", proxy_arp=0, pvlan=0)
+            self._write_flags(root, "lo", proxy_arp=1, pvlan=0)
+            self._write_flags(root, "eth0", proxy_arp=1, pvlan=0)
+            self._write_flags(root, "eth1", proxy_arp=0, pvlan=1)
+            self.assertEqual(
+                scan_proxy_arp_interfaces(root),
+                [("eth0", 1, 0, 1, 0), ("eth1", 0, 1, 0, 1)],
+            )
+
+    def test_representative_global_policy_arms_every_interface(self):
+        # La semantique du kernel est un OU logique : `all=1` active le proxy
+        # ARP sur chaque interface, elles sont donc toutes rapportees.
+        with tempfile.TemporaryDirectory() as root:
+            self._write_flags(root, "all", proxy_arp=1, pvlan=0)
+            self._write_flags(root, "default", proxy_arp=0, pvlan=0)
+            self._write_flags(root, "eth0", proxy_arp=0, pvlan=0)
+            self._write_flags(root, "eth1", proxy_arp=0, pvlan=0)
+            self.assertEqual(
+                scan_proxy_arp_interfaces(root),
+                [("eth0", 0, 0, 1, 0), ("eth1", 0, 0, 1, 0)],
+            )
+
+    def test_representative_safe_default_passes(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_flags(root, "all", proxy_arp=0, pvlan=0)
+            self._write_flags(root, "default", proxy_arp=0, pvlan=0)
+            self._write_flags(root, "eth0", proxy_arp=0, pvlan=0)
+            self._write_flags(root, "eth1", proxy_arp=0, pvlan=0)
+            self.assertEqual(scan_proxy_arp_interfaces(root), [])
+
+    def test_network_audit_reports_proxy_arp_surface(self):
+        with patch(
+            "hardaudit.scan_proxy_arp_interfaces",
+            return_value=[("eth0", 1, 0, 1, 0)],
+        ):
+            findings = [
+                finding for finding in audit_network().findings
+                if "proxy arp" in finding.title.lower()
+            ]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, "MEDIUM")
+        self.assertIn("eth0 (proxy_arp)", findings[0].detail)
+
+    def test_live_policy_is_exercised_read_only(self):
+        root = "/proc/sys/net/ipv4/conf"
+        if not os.path.exists(os.path.join(root, "all", "proxy_arp")):
+            self.skipTest("proxy_arp is not exposed by this kernel")
+        findings = scan_proxy_arp_interfaces(root)
+        for _, _, _, eff_proxy, eff_pvlan in findings:
+            self.assertIn(eff_proxy, (0, 1))
+            self.assertIn(eff_pvlan, (0, 1))
 
 
 class UnicastIPv4InL2MulticastTests(unittest.TestCase):
@@ -3163,9 +3228,10 @@ class FalsePositiveRegressionTests(unittest.TestCase):
     @patch("hardaudit.scan_unsafe_ipv6_source_routing", return_value=[])
     @patch("hardaudit.scan_unlogged_martian_interfaces", return_value=[])
     @patch("hardaudit.scan_unprotected_reverse_paths", return_value=[])
+    @patch("hardaudit.scan_proxy_arp_interfaces", return_value=[])
     @patch("hardaudit._capture")
     def test_allowed_port_stays_visible_without_penalty(
-        self, capture, _rp, _martians, _ipv6_source, _ipv6_redirect, _accept, _send,
+        self, capture, _rp, _martians, _proxy_arp, _ipv6_source, _ipv6_redirect, _accept, _send,
         _accept_local, _gratuitous_arp, _l2_multicast, _rfc1337
     ):
         capture.return_value = (0, "LISTEN 0 128 0.0.0.0:3306 0.0.0.0:*\nLISTEN 0 128 *:10050 *:*")

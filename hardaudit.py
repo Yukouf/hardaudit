@@ -343,6 +343,52 @@ def scan_unsolicited_arp_learning(root="/proc/sys/net/ipv4/conf"):
     return findings
 
 
+def scan_proxy_arp_interfaces(root="/proc/sys/net/ipv4/conf"):
+    """Liste les interfaces qui repondent au proxy ARP pour d'autres hotes.
+
+    La documentation du kernel definit le mode effectif comme le OU logique
+    entre ``conf/all`` et chaque interface ('enabled if at least one of
+    conf/{all,interface}/proxy_arp is set to TRUE'). Le meme principe
+    s'applique a ``proxy_arp_pvlan``. Un hote avec l'une ou l'autre valeur
+    effective a 1 repond aux requetes ARP d'autres machines : soit comme un
+    routeur de substitution pour les adresses qu'il sait joindre (proxy_arp),
+    soit en miroir sur la meme interface pour une isolation de VLAN prive
+    (proxy_arp_pvlan, RFC 3069).
+    """
+    try:
+        with open(os.path.join(root, "all", "proxy_arp"), encoding="utf-8") as f:
+            all_proxy_arp = int(f.read().strip())
+        with open(os.path.join(root, "all", "proxy_arp_pvlan"), encoding="utf-8") as f:
+            all_pvlan = int(f.read().strip())
+        interfaces = os.listdir(root)
+    except (OSError, ValueError):
+        return []
+
+    findings = []
+    for interface in sorted(interfaces):
+        # Le loopback ne recoit pas de trafic d'un voisin. all/default sont des
+        # modeles de configuration, pas des interfaces physiques.
+        if interface in ("all", "default", "lo"):
+            continue
+        try:
+            values = []
+            for name in ("proxy_arp", "proxy_arp_pvlan"):
+                with open(
+                    os.path.join(root, interface, name), encoding="utf-8"
+                ) as f:
+                    values.append(int(f.read().strip()))
+        except (OSError, ValueError):
+            continue
+        proxy_arp, pvlan = values
+        effective_proxy = max(all_proxy_arp, proxy_arp)
+        effective_pvlan = max(all_pvlan, pvlan)
+        if effective_proxy == 1 or effective_pvlan == 1:
+            findings.append(
+                (interface, proxy_arp, pvlan, effective_proxy, effective_pvlan)
+            )
+    return findings
+
+
 def scan_unicast_ipv4_in_l2_multicast(root="/proc/sys/net/ipv4/conf"):
     """Liste les interfaces acceptant un paquet IPv4 unicast dans une trame L2 multicast."""
     try:
@@ -993,6 +1039,23 @@ def audit_network(allowed_ports=None):
                 f"arp_accept est effectif sur : {interfaces}. Le mode 1 peut creer une entree voisine depuis toute annonce ARP gratuite inconnue ; le mode 2 la limite au sous-reseau local. Conserver 0 sauf besoin HA, mobilite ou proxy ARP documente.",
                 "LOW",
                 verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/arp_accept 2>/dev/null; ip -4 neigh show",
+            )
+
+        proxy_arp_findings = scan_proxy_arp_interfaces()
+        if proxy_arp_findings:
+            details = []
+            for interface, proxy, pvlan, eff_proxy, eff_pvlan in proxy_arp_findings:
+                flags = []
+                if eff_proxy == 1:
+                    flags.append("proxy_arp")
+                if eff_pvlan == 1:
+                    flags.append("proxy_arp_pvlan")
+                details.append(f"{interface} ({' + '.join(flags)})")
+            m.add(
+                "Interfaces repondant au proxy ARP pour d'autres hotes",
+                f"Interfaces concernees : {', '.join(details)}. Un hote avec proxy_arp effectif repond aux requetes ARP pour des adresses qu'il sait joindre, devenant un routeur de substitution utilisable pour l'interception du trafic ; proxy_arp_pvlan repond sur la meme interface pour une isolation de VLAN prive (RFC 3069). Le defaut est 0 : conserver ce mode seulement pour une bascule IP, du NAT ou un routage documente.",
+                "MEDIUM",
+                verify="grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/{proxy_arp,proxy_arp_pvlan} 2>/dev/null; ip route show; ip neigh show",
             )
 
         l2_multicast_unicast = scan_unicast_ipv4_in_l2_multicast()
