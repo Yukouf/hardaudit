@@ -1,0 +1,389 @@
+{
+  "host": "srv1772162",
+  "date": "2026-09-01T13:28:13.141755",
+  "score": 41,
+  "max": 100,
+  "grade": "D",
+  "summary": {
+    "INFO": 1,
+    "LOW": 32,
+    "MEDIUM": 8,
+    "HIGH": 2,
+    "CRITICAL": 0,
+    "total": 43
+  },
+  "modules": [
+    {
+      "name": "Utilisateurs & Authentification",
+      "ref": "CIS 5.x",
+      "score": 7,
+      "max": 12,
+      "findings": [
+        {
+          "title": "Sudo sans mot de passe",
+          "severity": "HIGH",
+          "ref": "CIS 5.x",
+          "detail": "NOPASSWD:ALL actif — toute commande sans authentification.",
+          "verify": ""
+        }
+      ]
+    },
+    {
+      "name": "SSH",
+      "ref": "CIS 5.2 / ANSSI R5",
+      "score": 1,
+      "max": 12,
+      "findings": [
+        {
+          "title": "PermitRootLogin effectif = yes",
+          "severity": "HIGH",
+          "ref": "CIS 5.2 / ANSSI R5",
+          "detail": "La configuration effective autorise encore root directement, au moins par cle.",
+          "verify": "sudo sshd -T | grep -E '^(permitrootlogin|passwordauthentication|x11forwarding|maxauthtries|clientaliveinterval) '"
+        },
+        {
+          "title": "PasswordAuthentication effectif = yes",
+          "severity": "MEDIUM",
+          "ref": "CIS 5.2 / ANSSI R5",
+          "detail": "Les mots de passe SSH restent autorises par la configuration effective.",
+          "verify": "sudo sshd -T | grep -E '^(permitrootlogin|passwordauthentication|x11forwarding|maxauthtries|clientaliveinterval) '"
+        },
+        {
+          "title": "X11Forwarding actif",
+          "severity": "LOW",
+          "ref": "CIS 5.2 / ANSSI R5",
+          "detail": "Desactiver si le transfert d'affichage n'est pas utilise.",
+          "verify": "sudo sshd -T | grep -E '^(permitrootlogin|passwordauthentication|x11forwarding|maxauthtries|clientaliveinterval) '"
+        },
+        {
+          "title": "MaxAuthTries effectif = 6",
+          "severity": "LOW",
+          "ref": "CIS 5.2 / ANSSI R5",
+          "detail": "Limiter a 4 essais ou moins.",
+          "verify": "sudo sshd -T | grep -E '^(permitrootlogin|passwordauthentication|x11forwarding|maxauthtries|clientaliveinterval) '"
+        },
+        {
+          "title": "ClientAliveInterval effectif = 0",
+          "severity": "LOW",
+          "ref": "CIS 5.2 / ANSSI R5",
+          "detail": "Configurer un delai de session inactive entre 1 et 300 secondes.",
+          "verify": "sudo sshd -T | grep -E '^(permitrootlogin|passwordauthentication|x11forwarding|maxauthtries|clientaliveinterval) '"
+        }
+      ]
+    },
+    {
+      "name": "Reseau & Ports",
+      "ref": "CIS 3.x",
+      "score": 0,
+      "max": 12,
+      "findings": [
+        {
+          "title": "Mises a jour par ARP gratuitous acceptees",
+          "severity": "LOW",
+          "ref": "CIS 3.x",
+          "detail": "Interfaces concernees : eth0. Une annonce ARP gratuite peut encore remplacer une entree existante du cache voisin, meme avec arp_accept=0. Activer drop_gratuitous_arp seulement sur un reseau statique qui n'utilise ni bascule IP, ni mobilite, ni proxy ARP.",
+          "verify": "grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/drop_gratuitous_arp 2>/dev/null; ip -4 neigh show"
+        },
+        {
+          "title": "IPv4 unicast accepte dans des trames L2 multicast",
+          "severity": "LOW",
+          "ref": "CIS 3.x",
+          "detail": "Interfaces concernees : eth0. Une trame Ethernet ou Wi-Fi broadcast/multicast peut transporter une destination IP unicast et atteindre la pile locale ; le rejet est recommande par RFC 1122 et limite notamment l'usurpation entre clients Wi-Fi.",
+          "verify": "grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/drop_unicast_in_l2_multicast 2>/dev/null"
+        },
+        {
+          "title": "Extension de routage IPv6 type 2 acceptee",
+          "severity": "MEDIUM",
+          "ref": "CIS 3.x",
+          "detail": "accept_source_route est non negatif globalement et sur : eth0. Linux refuse les autres types mais accepte encore le type 2 lie a Mobile IPv6 ; passer la politique globale ou locale a -1 sauf besoin documente.",
+          "verify": "grep -H . /proc/sys/net/ipv6/conf/{all,default,*}/accept_source_route 2>/dev/null"
+        },
+        {
+          "title": "Paquets IPv4 aux sources impossibles non journalises",
+          "severity": "LOW",
+          "ref": "CIS 3.x",
+          "detail": "log_martians vaut effectivement 0 sur : eth0. Le kernel rejettera encore selon ses controles reseau, mais l'indice disparait des logs ; activer apres avoir dimensionne la journalisation.",
+          "verify": "grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/log_martians 2>/dev/null; journalctl -k | grep -i martian"
+        },
+        {
+          "title": "Acceptation effective des redirects ICMP IPv4",
+          "severity": "MEDIUM",
+          "ref": "CIS 3.x",
+          "detail": "Interfaces concernees : eth0. Sur un hote, une valeur locale a 1 suffit meme si conf/all vaut 0 ; un voisin reseau peut alors tenter de modifier la route utilisee. Sur eth0, shared_media outrepasse secure_redirects : la passerelle proposee n'est pas limitee aux passerelles deja connues. Desactiver apres verification des besoins de routage.",
+          "verify": "grep -H . /proc/sys/net/ipv4/conf/{all,default,*}/{accept_redirects,forwarding,shared_media,secure_redirects} 2>/dev/null"
+        },
+        {
+          "title": "Acceptation effective des redirects ICMPv6",
+          "severity": "MEDIUM",
+          "ref": "CIS 3.x",
+          "detail": "Interfaces hote concernees : eth0. Un voisin IPv6 peut proposer une autre route ; desactiver accept_redirects sauf besoin explicite et verifier aussi les interfaces virtuelles.",
+          "verify": "grep -H . /proc/sys/net/ipv6/conf/{default,*/}{accept_redirects,forwarding} 2>/dev/null"
+        },
+        {
+          "title": "Protection TCP TIME-WAIT contre les RST desactivee",
+          "severity": "LOW",
+          "ref": "CIS 3.x",
+          "detail": "net.ipv4.tcp_rfc1337 = 0 : un RST valide peut supprimer prematurement l'etat TIME-WAIT et laisser d'anciens segments perturber une connexion reutilisant les memes adresses et ports. Le mode 1 conserve TIME-WAIT face a ce RST.",
+          "verify": "sysctl net.ipv4.tcp_rfc1337"
+        }
+      ]
+    },
+    {
+      "name": "Firewall",
+      "ref": "CIS 3.5",
+      "score": 9,
+      "max": 12,
+      "findings": [
+        {
+          "title": "Politique entrante par defaut non bloquante",
+          "severity": "MEDIUM",
+          "ref": "CIS 3.5",
+          "detail": "Aucune politique deny/drop entrante n'a ete identifiee dans UFW, nftables ou iptables. Les regles detaillees restent a examiner.",
+          "verify": "sudo ufw status verbose; sudo nft list ruleset; sudo iptables -S INPUT"
+        }
+      ]
+    },
+    {
+      "name": "Mises a jour",
+      "ref": "CIS 1.8 / ANSSI R3",
+      "score": 10,
+      "max": 10,
+      "findings": []
+    },
+    {
+      "name": "Kernel & Protections",
+      "ref": "CIS 1.6 / ANSSI R14",
+      "score": 0,
+      "max": 14,
+      "findings": [
+        {
+          "title": "Fusion des caches slab active",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "CONFIG_SLAB_MERGE_DEFAULT est actif et slab_nomerge est absent de la ligne de demarrage. Des objets de sous-systemes differents peuvent partager un cache ; slab_nomerge reduit la plupart des effets d'une attaque heap a son cache d'origine, avec un cout memoire et de cache CPU.",
+          "verify": "grep '^CONFIG_SLAB_MERGE_DEFAULT=' /boot/config-$(uname -r); cat /proc/cmdline; find /sys/kernel/slab -maxdepth 1 -type l | head"
+        },
+        {
+          "title": "Randomisation des pages memoire disponible mais inactive",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "/sys/module/page_alloc/parameters/shuffle = N. La predictibilite des listes de pages libres reste plus forte ; page_alloc.shuffle=1 complete la randomisation slab, mais peut degrader les performances sur une plateforme sans cache memoire direct.",
+          "verify": "cat /sys/module/page_alloc/parameters/shuffle; grep '^CONFIG_SHUFFLE_PAGE_ALLOCATOR=' /boot/config-$(uname -r); cat /proc/cmdline"
+        },
+        {
+          "title": "Warnings kernel repetables sans limite",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "kernel.panic_on_warn = 0 et kernel.warn_limit = 0. La valeur 0 signifie compteur desactive : aucune accumulation de WARN ne declenchera de panic. Utiliser une borne positive dimensionnee apres avoir corrige les warnings legitimes ; panic_on_warn=1 peut transformer le premier bug en indisponibilite.",
+          "verify": "sysctl kernel.panic_on_warn kernel.warn_limit"
+        },
+        {
+          "title": "Detecteur de hard lockup CPU desactive",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "kernel.nmi_watchdog = 0. Le watchdog soft peut rester actif et faire afficher kernel.watchdog = 1, mais il depend encore des interruptions timer ; seul le watchdog NMI detecte un CPU completement bloque. L'activer apres validation des compteurs de performance et de l'hyperviseur.",
+          "verify": "sysctl kernel.watchdog kernel.soft_watchdog kernel.nmi_watchdog"
+        },
+        {
+          "title": "Magic SysRq autorise des actions destructrices",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "kernel.sysrq = 176 autorise depuis le clavier : redemarrage/extinction. Conserver seulement les bits de recuperation necessaires ; ce reglage ne bloque pas /proc/sysrq-trigger pour un administrateur.",
+          "verify": "sysctl kernel.sysrq; stat -c '%A %U %G %n' /proc/sysrq-trigger"
+        },
+        {
+          "title": "Files de messages SysV a quota extensible",
+          "severity": "INFO",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "msgmni=32000, msgmnb=16384, msgmax=8192 : un compte local peut creer jusqu'a 32000 files de 16384 octets, soit environ 500 Mo de memoire noyau sans quota global. Reduire msgmni/msgmnb sur un hote partage apres validation des applications SysV existantes.",
+          "verify": "sysctl kernel.msgmax kernel.msgmnb kernel.msgmni; ipcs -q"
+        },
+        {
+          "title": "FIFO insuffisamment proteges",
+          "severity": "MEDIUM",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "/proc/sys/fs/protected_fifos = 1 (minimum: 2). Un autre utilisateur peut exploiter un fichier, lien ou FIFO piege dans un repertoire partage.",
+          "verify": "cat /proc/sys/fs/protected_fifos"
+        },
+        {
+          "title": "Durcissement du JIT BPF incomplet",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "/proc/sys/net/core/bpf_jit_harden = 0 (desactive). Le mode 2 durcit tous les programmes BPF JIT et reduit le risque de JIT spraying, avec un possible cout de performance.",
+          "verify": "cat /proc/sys/net/core/bpf_jit_harden; cat /proc/sys/kernel/unprivileged_bpf_disabled"
+        },
+        {
+          "title": "Adresses du JIT BPF publiees dans kallsyms",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "net.core.bpf_jit_kallsyms = 1 (defaut 0) avec bpf_jit_enable actif et bpf_jit_harden absent. La zone de code JIT a sa position exposee : la lecture est limitee aux processus avec CAP_SYSLOG (kptr_restrict>0) ; l'export alimente surtout le tracage et reste une surface moindre. Passer a 0 (ou laisser bpf_jit_harden=1/2, qui desactive cet export) si le tracage BPF ne l'exige pas.",
+          "verify": "cat /proc/sys/net/core/bpf_jit_kallsyms /proc/sys/net/core/bpf_jit_enable /proc/sys/net/core/bpf_jit_harden /proc/sys/kernel/kptr_restrict"
+        },
+        {
+          "title": "io_uring accessible a tous les utilisateurs",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "/proc/sys/kernel/io_uring_disabled = 0 et kernel.apparmor_restrict_unprivileged_io_uring = 0. Tout processus peut creer une instance io_uring sans la mediation AppArmor optionnelle de ce kernel ; activer cette mediation, ou utiliser le mode global 1/2 apres test de compatibilite.",
+          "verify": "cat /proc/sys/kernel/io_uring_disabled; [ ! -e /proc/sys/kernel/apparmor_restrict_unprivileged_io_uring ] || cat /proc/sys/kernel/apparmor_restrict_unprivileged_io_uring"
+        },
+        {
+          "title": "Fichiers memfd executables par defaut",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "/proc/sys/vm/memfd_noexec = 0. memfd_create() implique encore MFD_EXEC, ce qui facilite l'execution de code sans fichier persistant ; utiliser 1, ou 2 si aucun runtime ne requiert de memfd executable.",
+          "verify": "cat /proc/sys/vm/memfd_noexec"
+        },
+        {
+          "title": "Exception userns des profils AppArmor unconfined active",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "/proc/sys/kernel/apparmor_restrict_unprivileged_unconfined = 0 alors que la mediation userns AppArmor est active. Les profils marques unconfined peuvent conserver leur propre permission de creer un namespace utilisateur ; utiliser 1 apres verification des profils applicatifs.",
+          "verify": "sysctl kernel.unprivileged_userns_clone kernel.apparmor_restrict_unprivileged_userns kernel.apparmor_restrict_unprivileged_unconfined"
+        },
+        {
+          "title": "Anciennes ABI AppArmor exemptées de la médiation userns",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "/proc/sys/kernel/apparmor_restrict_unprivileged_userns_force = 0 alors que la restriction userns est active. Les politiques anciennes peuvent contourner cette médiation par compatibilité ABI ; utiliser 1 seulement après avoir actualisé et testé les profils AppArmor.",
+          "verify": "sysctl kernel.unprivileged_userns_clone kernel.apparmor_restrict_unprivileged_userns kernel.apparmor_restrict_unprivileged_userns_force"
+        },
+        {
+          "title": "Autoload TTY accessible aux utilisateurs non privilegies",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "/proc/sys/dev/tty/ldisc_autoload = 1. Un compte local peut demander le chargement automatique d'une discipline TTY absente ; utiliser 0 si cette compatibilite n'est pas requise.",
+          "verify": "cat /proc/sys/dev/tty/ldisc_autoload"
+        },
+        {
+          "title": "Remplacement du kernel par kexec encore autorise",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "/proc/sys/kernel/kexec_load_disabled = 0. Le verrou kexec n'est pas active ; envisager 1 seulement si ni kexec ni kdump ne sont requis (irreversible jusqu'au redemarrage). Les chargements d'images reboot, panic sont en plus sans limite (-1) ; fixer un nombre positif adapte peut reduire l'exposition sans desactiver kexec.",
+          "verify": "sysctl kernel.kexec_load_disabled kernel.kexec_load_limit_reboot kernel.kexec_load_limit_panic"
+        },
+        {
+          "title": "Chargement des modules noyau encore autorise",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "/proc/sys/kernel/modules_disabled = 0. Une appliance stable peut utiliser 1 apres avoir charge tous ses pilotes ; ce verrou bloque chargement et retrait et est irreversible jusqu'au redemarrage.",
+          "verify": "cat /proc/sys/kernel/modules_disabled; lsmod"
+        },
+        {
+          "title": "Modules noyau non signes encore chargeables",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "La verification existe mais reste permissive, tandis que le chargement dynamique et Kernel Lockdown restent ouverts. Un module sans signature valide peut donc entrer dans le kernel avec CAP_SYS_MODULE ; activer module.sig_enforce=1 au demarrage ou CONFIG_MODULE_SIG_FORCE apres avoir signe tous les modules requis.",
+          "verify": "grep '^CONFIG_MODULE_SIG' /boot/config-$(uname -r); cat /proc/cmdline; cat /proc/sys/kernel/modules_disabled; cat /sys/kernel/security/lockdown"
+        },
+        {
+          "title": "Kernel Lockdown disponible mais inactif",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "/sys/kernel/security/lockdown selectionne [none]. Les modes integrity/confidentiality bloquent des interfaces permettant de modifier ou d'extraire des donnees du kernel ; a reserver aux hotes dont les modules, kexec et outils de diagnostic ont ete testes.",
+          "verify": "cat /sys/kernel/security/lockdown; cat /proc/cmdline"
+        },
+        {
+          "title": "Ecriture illimitee dans le ring buffer kernel",
+          "severity": "LOW",
+          "ref": "CIS 1.6 / ANSSI R14",
+          "detail": "/proc/sys/kernel/printk_devkmsg = on. Un processus ayant /dev/kmsg en ecriture peut injecter sans limite des messages a l'apparence noyau dans les journaux systeme. Passer a off (recommande par les guides de durcissement, mais incompatible systemd-journald selon version) ou au minimum ratelimit pour borner le debit d'injection.",
+          "verify": "cat /proc/sys/kernel/printk_devkmsg; [ -e /dev/kmsg ] && stat -c '%A %U %G %n' /dev/kmsg"
+        }
+      ]
+    },
+    {
+      "name": "Services & Cron",
+      "ref": "CIS 2.x",
+      "score": 4,
+      "max": 10,
+      "findings": [
+        {
+          "title": "Service a redemarrer apres mise a jour",
+          "severity": "LOW",
+          "ref": "CIS 2.x",
+          "detail": "PID 778 (systemd-logind) utilise encore /usr/lib/systemd/systemd-logind (deleted). Frequent apres une mise a jour ; ce fait seul ne prouve pas un malware.",
+          "verify": "sudo ls -l /proc/778/exe; sudo ps -fp 778"
+        },
+        {
+          "title": "Service a redemarrer apres mise a jour",
+          "severity": "LOW",
+          "ref": "CIS 2.x",
+          "detail": "PID 860 (agetty) utilise encore /usr/sbin/agetty (deleted). Frequent apres une mise a jour ; ce fait seul ne prouve pas un malware.",
+          "verify": "sudo ls -l /proc/860/exe; sudo ps -fp 860"
+        },
+        {
+          "title": "Service a redemarrer apres mise a jour",
+          "severity": "LOW",
+          "ref": "CIS 2.x",
+          "detail": "PID 862 (unattended-upgr) utilise encore /usr/bin/python3.12 (deleted). Frequent apres une mise a jour ; ce fait seul ne prouve pas un malware.",
+          "verify": "sudo ls -l /proc/862/exe; sudo ps -fp 862"
+        },
+        {
+          "title": "Service a redemarrer apres mise a jour",
+          "severity": "LOW",
+          "ref": "CIS 2.x",
+          "detail": "PID 868 (agetty) utilise encore /usr/sbin/agetty (deleted). Frequent apres une mise a jour ; ce fait seul ne prouve pas un malware.",
+          "verify": "sudo ls -l /proc/868/exe; sudo ps -fp 868"
+        },
+        {
+          "title": "Service a redemarrer apres mise a jour",
+          "severity": "LOW",
+          "ref": "CIS 2.x",
+          "detail": "PID 1227 ((sd-pam)) utilise encore /usr/lib/systemd/systemd-executor (deleted). Frequent apres une mise a jour ; ce fait seul ne prouve pas un malware.",
+          "verify": "sudo ls -l /proc/1227/exe; sudo ps -fp 1227"
+        },
+        {
+          "title": "Services utilisant encore des bibliotheques remplacees",
+          "severity": "LOW",
+          "ref": "CIS 2.x",
+          "detail": "32 mapping(s) executable(s) supprime(s) dans 5 processus : 755 (dbus-daemon), 778 (systemd-logind), 862 (unattended-upgr), 1226 (systemd), 1227 ((sd-pam)). Frequent apres une mise a jour ; redemarrer les services apres validation.",
+          "verify": "sudo grep -l -F ' (deleted)' /proc/[0-9]*/maps 2>/dev/null"
+        }
+      ]
+    },
+    {
+      "name": "Systeme de fichiers",
+      "ref": "CIS 1.1 / ANSSI R28",
+      "score": 5,
+      "max": 10,
+      "findings": [
+        {
+          "title": "/tmp executable",
+          "severity": "MEDIUM",
+          "ref": "CIS 1.1 / ANSSI R28",
+          "detail": "Monter /tmp avec noexec,nosuid si compatible avec les applications.",
+          "verify": "findmnt /tmp -o TARGET,OPTIONS"
+        },
+        {
+          "title": "/dev/shm insuffisamment cloisonne",
+          "severity": "LOW",
+          "ref": "CIS 1.1 / ANSSI R28",
+          "detail": "Options absentes : noexec. Ajouter nodev,nosuid,noexec si les applications le permettent ; noexec bloque l'execution directe mais pas la lecture par un interpreteur.",
+          "verify": "findmnt -T /dev/shm -o TARGET,FSTYPE,OPTIONS"
+        },
+        {
+          "title": "Metadonnees des processus visibles entre utilisateurs",
+          "severity": "LOW",
+          "ref": "CIS 1.1 / ANSSI R28",
+          "detail": "/proc utilise le mode hidepid=0 par defaut. Sur un hote multi-utilisateur, hidepid=1 ou 2 limite l'inventaire des commandes et services des autres comptes ; verifier la compatibilite des outils de supervision.",
+          "verify": "findmnt /proc -o TARGET,FSTYPE,OPTIONS; runuser -u nobody -- test -r /proc/1/status"
+        }
+      ]
+    },
+    {
+      "name": "Logs & Monitoring",
+      "ref": "CIS 4.x",
+      "score": 5,
+      "max": 8,
+      "findings": [
+        {
+          "title": "auditd absent",
+          "severity": "MEDIUM",
+          "ref": "CIS 4.x",
+          "detail": "Installer auditd pour tracer les evenements securite.",
+          "verify": "systemctl status auditd --no-pager"
+        }
+      ]
+    }
+  ]
+}

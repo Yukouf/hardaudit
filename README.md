@@ -141,6 +141,46 @@ Pas de `pip install`, de virtualenv ou de Docker : **Python 3.8+ suffit.**
 
 ## 📊 Scoring
 
+### Schéma de sortie JSON
+
+La sortie `--json` est pensée pour l'exploitation des données (analystes, tableaux de bord, historique) :
+
+```json
+{
+  "host": "srv-prod-01",          // machine auditée
+  "date": "2026-09-01T13:26:25",  // horodatage ISO local
+  "score": 74,                    // score total /100
+  "max": 100,
+  "grade": "C",                   // A ≥ 90 · B ≥ 75 · C ≥ 60 · D ≥ 40 · F < 40
+  "summary": {                    // compteurs par sévérité (agrégat direct)
+    "INFO": 1, "LOW": 32, "MEDIUM": 8, "HIGH": 2, "CRITICAL": 0, "total": 43
+  },
+  "modules": [                    // 9 modules
+    {
+      "name": "SSH", "ref": "CIS 5.2 / ANSSI R5", "score": 12, "max": 12,
+      "findings": [
+        {
+          "title": "PermitRootLogin = yes",
+          "severity": "HIGH",    // INFO | LOW | MEDIUM | HIGH | CRITICAL
+          "ref": "CIS 5.2 / ANSSI R5",   // référentiel associé (jointure possible)
+          "detail": "…",
+          "verify": "commande de vérification…"
+        }
+      ]
+    }
+  ]
+}
+```
+
+- **Fichier d'exemple réel** : [`examples/hardaudit_sample.json`](examples/hardaudit_sample.json) — à charger directement pour tester ses parsers.
+- **Champ `ref`** : référence CIS / ANSSI par module et par finding → jointures avec les référentiels (CIS Benchmarks, ANSSI R5…).
+- **Champ `summary`** : compteurs par sévérité au niveau racine — pas besoin de parser les findings pour agréger.
+- **Suivi temporel** : le script `hardaudit_watch.sh` (installé par défaut) écrit `historique.csv` (`date,score,hostname`) à chaque audit hebdo → séries temporelles prêtes à l'emploi.
+
+```bash
+sudo hardaudit --json > audit_$(hostname)_$(date +%F).json
+```
+
 ```
 Score    Grade   Interprétation
 ─────────────────────────────────

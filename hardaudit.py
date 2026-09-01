@@ -3543,13 +3543,23 @@ def main():
     ]
 
     if args.json:
+        findings_all = [f for m in modules for f in m.findings]
+        summary = {sev: sum(1 for f in findings_all if f.severity == sev)
+                   for sev in ("INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL")}
+        summary["total"] = len(findings_all)
+        total = sum(m.score for m in modules)
+        max_total = sum(m.weight for m in modules)
+        pct = int(total / max_total * 100) if max_total > 0 else 0
+        grade = "A" if pct >= 90 else "B" if pct >= 75 else "C" if pct >= 60 else "D" if pct >= 40 else "F"
         data = {
             "host": socket.gethostname(),
             "date": datetime.now().isoformat(),
-            "score": sum(m.score for m in modules),
-            "max": sum(m.weight for m in modules),
-            "modules": [{"name": m.name, "score": m.score, "max": m.weight,
-                         "findings": [{"title": f.title, "severity": f.severity,
+            "score": total,
+            "max": max_total,
+            "grade": grade,
+            "summary": summary,
+            "modules": [{"name": m.name, "ref": m.ref, "score": m.score, "max": m.weight,
+                         "findings": [{"title": f.title, "severity": f.severity, "ref": m.ref,
                                        "detail": f.detail, "verify": f.verify}
                                       for f in m.findings]} for m in modules]
         }
