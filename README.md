@@ -57,7 +57,25 @@ sudo python3 hardaudit.py
 
 ---
 
-## ⚡ Installation
+## ⚡ Installation — 1 commande, depuis n'importe quelle machine
+
+**Pas besoin de git, pas besoin de clone.** Sur n'importe quel serveur Linux
+(avec internet), copie-colle :
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Yukouf/hardaudit/main/install.sh | sudo bash
+```
+
+L'installateur fait tout tout seul :
+- installe Python 3 s'il manque (apt / dnf / yum / apk)
+- installe `hardaudit` (l'auditeur) + `hardaudit_watch` (la surveillance)
+- planifie un **audit automatique chaque lundi à 7h**
+- lance le **premier audit** et affiche la note
+
+Options : `--no-cron` (sans la surveillance hebdo), `--no-audit` (sans le
+premier audit), `--dir=/chemin` (autre dossier d'installation).
+
+Alternative minimale (binaire seul) :
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Yukouf/hardaudit/main/hardaudit.py \
@@ -65,11 +83,14 @@ curl -fsSL https://raw.githubusercontent.com/Yukouf/hardaudit/main/hardaudit.py 
   && sudo chmod +x /usr/local/bin/hardaudit
 ```
 
-Puis lance l'audit depuis n'importe quel dossier :
+Puis lance l'audit depuis n'importe quel dossier : `sudo hardaudit`
 
-```bash
-sudo hardaudit
-```
+> 💡 **Pour les non-techniciens** : HardAudit, c'est le **contrôle technique
+> du serveur**. Comme pour une voiture, il vérifie 9 points de sécurité
+> (accès, mots de passe, pare-feu, mises à jour, ports…) et donne une
+> **note sur 100**. Note ≥ 80 → machine en règle ✅ · note < 80 → points à
+> corriger ❌. Une fois installé, il se re-contrôle tout seul chaque semaine,
+> garde l'historique des notes, et **alerte si la note baisse**.
 
 ## 🏗️ Architecture
 
