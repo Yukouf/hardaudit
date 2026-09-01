@@ -181,6 +181,24 @@ La sortie `--json` est pensée pour l'exploitation des données (analystes, tabl
 sudo hardaudit --json > audit_$(hostname)_$(date +%F).json
 ```
 
+### Collecte multi-machines
+
+Pour un **parc entier** (ou un dataset pour un analyste), le collecteur
+[`hardaudit_collect.py`](hardaudit_collect.py) exécute l'audit sur plusieurs
+machines (locale + distantes via SSH) et agrège :
+
+```bash
+# Machine locale + 2 hôtes distants (clé SSH configurée)
+sudo python3 hardaudit_collect.py --local --hosts admin@vps1 admin@vps2
+
+# Sorties (dossier hardaudit_data/ par défaut) :
+#   dataset_AAAAMMJJ.json  → audits bruts complets (modules + findings)
+#   synthese_AAAAMMJJ.csv  → tableau hôte × score × sévérités (pandas/Excel)
+```
+
+Sur un hôte distant, HardAudit doit être installé (`/opt/hardaudit/hardaudit.py`
+ou `sudo hardaudit` sur le PATH).
+
 ```
 Score    Grade   Interprétation
 ─────────────────────────────────
