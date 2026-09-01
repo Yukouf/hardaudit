@@ -14,6 +14,7 @@
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue?logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Stdlib Only](https://img.shields.io/badge/Deps-Zero-green)](hardaudit.py)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Yukouf/hardaudit/badge)](https://securityscorecards.dev/?uri=github.com/Yukouf/hardaudit)
 [![CIS](https://img.shields.io/badge/Based%20on-CIS%20Benchmarks-005571)](https://www.cisecurity.org/benchmark/debian_linux)
 
 ---
